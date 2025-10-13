@@ -1,0 +1,37 @@
+<instructions>
+    Please analyze this transcript:
+
+    {request.transcript}
+
+    For each performance issue you identify, provide the following:
+
+    <issue_components>
+      <component>A brief heading summarizing the issue</component>
+      <component>A paragraph describing the issue in more detail</component>
+      <component>A bulleted list of 2-3 key points--to the extent sufficient examples exist--from the transcript that demonstrate the issue, paraphrased rather than directly quoted</component>
+    </issue_components>
+
+    Do not include an introductory paragraph. Jump right into the first issue.
+  </instructions>
+
+  <response_format>
+    Format your response like this:
+
+   1: [Heading]
+    
+    [Paragraph describing the issue in detail]
+
+    Examples:
+    • [Example 1 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+    • [Example 2 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+    • [Example 3 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+
+    2: [Heading]
+    
+    [Paragraph describing the issue in detail]
+
+    Examples:
+    • [Example 1 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+    • [Example 2 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+    • [Example 3 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+</response_format>

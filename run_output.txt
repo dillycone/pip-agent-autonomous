@@ -1,0 +1,341 @@
+
+> pip-agent-autonomous@0.1.0 dev
+> tsx src/main.ts
+
+Transcribing audio with Gemini (this may take a few minutes)...
+Transcription complete. Transcript length: 11366 characters.
+EVENT {
+  type: 'system',
+  subtype: 'init',
+  cwd: '/Users/bc/Desktop/pip-agent-autonomous',
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  tools: [
+    'Task',
+    'Bash',
+    'Glob',
+    'Grep',
+    'ExitPlanMode',
+    'Read',
+    'Edit',
+    'Write',
+    'NotebookEdit',
+    'WebFetch',
+    'TodoWrite',
+    'WebSearch',
+    'BashOutput',
+    'KillShell',
+    'SlashCommand',
+    'mcp__docx-exporter__render_docx'
+  ],
+  mcp_servers: [ { name: 'docx-exporter', status: 'connected' } ],
+  model: 'claude-sonnet-4-5-20250929',
+  permissionMode: 'bypassPermissions',
+  slash_commands: [
+    'compact',
+    'context',
+    'cost',
+    'init',
+    'output-style:new',
+    'pr-comments',
+    'release-notes',
+    'todos',
+    'review',
+    'security-review'
+  ],
+  apiKeySource: 'ANTHROPIC_API_KEY',
+  output_style: 'default',
+  agents: [
+    'general-purpose',
+    'statusline-setup',
+    'output-style-setup',
+    'policy-judge'
+  ],
+  uuid: '0fe1a4ea-0801-4a14-b916-1d1471076f73'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_01LPtHoPmLrzmDZVs73wJZH6',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 4,
+      cache_creation_input_tokens: 3656,
+      cache_read_input_tokens: 11766,
+      cache_creation: [Object],
+      output_tokens: 1,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: 'f9a849a2-366d-4fbe-85ae-7590c29fe47d'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_01LPtHoPmLrzmDZVs73wJZH6',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 4,
+      cache_creation_input_tokens: 3656,
+      cache_read_input_tokens: 11766,
+      cache_creation: [Object],
+      output_tokens: 4483,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: 'ddee1db1-0c14-47d7-8832-899a8ffb0c96'
+}
+EVENT {
+  type: 'user',
+  message: { role: 'user', content: [ [Object] ] },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '9bbe16ae-0f4e-4c97-9310-4b5b0813ebe8'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_015J7Nmxxs2jPmjua6NwXXXM',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 7,
+      cache_creation_input_tokens: 6681,
+      cache_read_input_tokens: 15422,
+      cache_creation: [Object],
+      output_tokens: 1,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: 'd4f18d82-78af-47dc-bb3a-e054c152f51d'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_015J7Nmxxs2jPmjua6NwXXXM',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 7,
+      cache_creation_input_tokens: 6681,
+      cache_read_input_tokens: 15422,
+      cache_creation: [Object],
+      output_tokens: 2028,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '3ff45a91-3e92-4cfb-a122-95f8b508c1a0'
+}
+EVENT {
+  type: 'user',
+  message: { role: 'user', content: [ [Object] ] },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '907237c3-dfe7-46f0-ae3d-e6cbea5f8214'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_012Jb72gXgVPUwWmAcrFa1Uc',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 7,
+      cache_creation_input_tokens: 4596,
+      cache_read_input_tokens: 22103,
+      cache_creation: [Object],
+      output_tokens: 1,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '6769536a-2ef4-4eed-88ef-9958ce19ae52'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_012Jb72gXgVPUwWmAcrFa1Uc',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 7,
+      cache_creation_input_tokens: 4596,
+      cache_read_input_tokens: 22103,
+      cache_creation: [Object],
+      output_tokens: 2285,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '639cc96d-f3af-4c50-ba5f-e04ca1fbb988'
+}
+EVENT {
+  type: 'user',
+  message: { role: 'user', content: [ [Object] ] },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: 'dc3cfc69-ce14-43b2-a10e-d4062d25f105'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_01QtQJ2HYNbXus6xWSkgqv3e',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 7,
+      cache_creation_input_tokens: 2328,
+      cache_read_input_tokens: 26699,
+      cache_creation: [Object],
+      output_tokens: 2165,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '041084d9-956a-4f0a-80e2-1cf3e9b1df5a'
+}
+EVENT {
+  type: 'user',
+  message: { role: 'user', content: [ [Object] ] },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: 'c032b28e-83ad-4663-a32c-94f6481a9842'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_011Mdhtz1fhtPERLT4TWCZjC',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 8,
+      cache_creation_input_tokens: 2277,
+      cache_read_input_tokens: 29027,
+      cache_creation: [Object],
+      output_tokens: 2165,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '530aec96-2e95-4bfa-bec3-cc1c12c1e28b'
+}
+EVENT {
+  type: 'user',
+  message: { role: 'user', content: [ [Object] ] },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: '7d94846f-c267-4281-979e-617dc3191f7c'
+}
+EVENT {
+  type: 'assistant',
+  message: {
+    model: 'claude-sonnet-4-5-20250929',
+    id: 'msg_017ozfrbZazB8pJ5Wx8KTGZ4',
+    type: 'message',
+    role: 'assistant',
+    content: [ [Object] ],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 8,
+      cache_creation_input_tokens: 2187,
+      cache_read_input_tokens: 31304,
+      cache_creation: [Object],
+      output_tokens: 29,
+      service_tier: 'standard'
+    }
+  },
+  parent_tool_use_id: null,
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  uuid: 'cb85a218-a96a-4c3a-b321-dac71f6cc430'
+}
+EVENT {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  duration_ms: 254500,
+  duration_api_ms: 257941,
+  num_turns: 14,
+  result: '```json\n{"status":"ok","docx":"exports/pip-1760222317054.docx"}\n```',
+  session_id: 'b92ea5ee-8c42-4e46-8319-8ca0078164fd',
+  total_cost_usd: 0.43079619999999996,
+  usage: {
+    input_tokens: 41,
+    cache_creation_input_tokens: 21725,
+    cache_read_input_tokens: 136321,
+    output_tokens: 13155,
+    server_tool_use: { web_search_requests: 0 },
+    service_tier: 'standard',
+    cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 21725 }
+  },
+  modelUsage: {
+    'claude-3-5-haiku-20241022': {
+      inputTokens: 11923,
+      outputTokens: 26,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUSD: 0.009642399999999999,
+      contextWindow: 200000
+    },
+    'claude-sonnet-4-5-20250929': {
+      inputTokens: 50,
+      outputTokens: 17940,
+      cacheReadInputTokens: 136321,
+      cacheCreationInputTokens: 29602,
+      webSearchRequests: 0,
+      costUSD: 0.4211538,
+      contextWindow: 200000
+    }
+  },
+  permission_denials: [],
+  uuid: 'd9c46ccc-fb6f-4d6c-b4dd-9a808a2b11c2'
+}
+```json
+{"status":"ok","docx":"exports/pip-1760222317054.docx"}
+```

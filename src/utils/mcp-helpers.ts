@@ -1,0 +1,95 @@
+/**
+ * Helper functions for standardized MCP tool responses.
+ * These utilities eliminate duplicate JSON response patterns across MCP tools.
+ *
+ * Note: For error responses, use mcpError from safe-stringify.ts which includes
+ * sanitization and redaction of sensitive data.
+ */
+
+/**
+ * Standard MCP tool result structure.
+ * All MCP tools should return this format for consistency.
+ */
+export interface MCPToolResult {
+  content: Array<{
+    type: "text";
+    text: string;
+  }>;
+  isError?: boolean;
+}
+
+/**
+ * Structure for successful MCP responses.
+ */
+export interface MCPSuccessResponse {
+  ok: true;
+  [key: string]: unknown;
+}
+
+/**
+ * Creates a standardized successful MCP tool response.
+ *
+ * @param data - The success data to return (will be merged with { ok: true })
+ * @returns Formatted MCP tool result with success payload
+ *
+ * @example
+ * return mcpSuccess({ transcript: "...", segments: [...] });
+ * // Returns: { content: [{ type: "text", text: '{"ok":true,"transcript":"...","segments":[...]}' }] }
+ *
+ * @example
+ * return mcpSuccess({ draft: "Performance Improvement Plan..." });
+ * // Returns: { content: [{ type: "text", text: '{"ok":true,"draft":"..."}' }] }
+ *
+ * @example
+ * return mcpSuccess({ outputPath: "/path/to/file.docx" });
+ * // Returns: { content: [{ type: "text", text: '{"ok":true,"outputPath":"/path/to/file.docx"}' }] }
+ */
+export function mcpSuccess(data: Record<string, unknown>): MCPToolResult {
+  const response: MCPSuccessResponse = {
+    ok: true,
+    ...data
+  };
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(response)
+      }
+    ]
+  };
+}
+
+/**
+ * Helper to check if an environment variable exists.
+ *
+ * @param key - Environment variable name
+ * @returns True if the environment variable is set and non-empty
+ *
+ * @example
+ * if (!hasEnvVar("GEMINI_API_KEY")) {
+ *   return mcpError("Missing GEMINI_API_KEY");
+ * }
+ */
+export function hasEnvVar(key: string): boolean {
+  const value = process.env[key];
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Helper to get an environment variable as a number with a default fallback.
+ *
+ * @param key - Environment variable name
+ * @param defaultValue - Default value if env var is not set or invalid
+ * @returns Parsed number value or default
+ *
+ * @example
+ * const chunkSeconds = getEnvNumber("GEMINI_CHUNK_SECONDS", DEFAULT_AUDIO_CHUNK_SECONDS);
+ */
+export function getEnvNumber(key: string, defaultValue: number): number {
+  const value = process.env[key];
+  if (!value) return defaultValue;
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
+}

@@ -1,0 +1,9 @@
+### Company PIP Guardrails (sample — replace with your policy)
+
+- Use neutral, factual, and professional tone.
+- Avoid protected characteristics or medical details unless policy mandates.
+- Ensure goals are specific, measurable, time-bound, and achievable with support.
+- Include check-in cadence and explicit consequences statement.
+- No direct quotes from transcript; paraphrase with the employee's name.
+- Do not include new allegations not discussed in the transcript.
+- Ensure language is in the requested output language consistently.
