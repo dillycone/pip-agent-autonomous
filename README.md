@@ -79,6 +79,24 @@ npm run dev -- --audio /absolute/path/to/meeting.mp3 --outdoc exports/PIP.docx
 
 - `src/main.ts` — Orchestrates the autonomous end‑to‑end run using the Agent SDK (streaming mode).  
 - `src/mcp/geminiTranscriber.ts` — MCP tool that calls **Gemini 2.5 Pro** to transcribe audio with language control.  
+
+## S3 Presigned URL Mode (No Chunking)
+
+This project can upload audio to S3 and pass a presigned URL to Gemini instead of uploading the file or chunking locally. This is now the default behavior.
+
+Env config (see `.env.example`):
+
+- `S3_PROFILE` — AWS CLI profile to use (default `BCRoot`)
+- `S3_BUCKET` — Target bucket; if unset, the app attempts to create a bucket automatically
+- `S3_PREFIX` — Key prefix for uploads (default `audio`)
+- `S3_PRESIGN_TTL_SECONDS` — URL TTL in seconds (default `3600`)
+- `S3_DELETE_AFTER` — Delete object after transcription (default `true`)
+- `GEMINI_INPUT_MODE` — `presigned` (default) or `upload`
+
+Notes:
+
+- For first use, ensure the profile has `s3:*` and `sts:GetCallerIdentity` permissions.
+- If presigned single-pass fails (e.g., timeout), the tool falls back to the legacy path (SDK upload, then chunking if needed).
 - `src/mcp/docxExporter.ts` — MCP tool that fills a DOCX template with `{pip_body}`, or generates a fallback DOCX.  
 - `src/agents/policyJudge.ts` — Subagent that judges the draft against your **policies/guardrails**.  
 - `prompts/draft-pip.txt` — Your exact drafting prompt (already included).  

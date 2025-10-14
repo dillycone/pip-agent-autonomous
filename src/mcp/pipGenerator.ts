@@ -18,7 +18,9 @@ import {
   createAnthropicService,
   createFileSystemService
 } from "../services/index.js";
+import { createChildLogger } from "../utils/logger.js";
 
+const logger = createChildLogger("pip-generator");
 
 async function generateDraft(
   params: {
@@ -34,10 +36,30 @@ async function generateDraft(
 ) {
   const promptPathResolved = path.resolve(params.promptPath);
   const promptRaw = await fsService.readFile(promptPathResolved, "utf-8") as string;
+
+  // Validate transcript is not empty or too short
+  if (!params.transcript || params.transcript.trim().length < 50) {
+    throw new PIPGenerationError(
+      "Transcript is too short or empty. Ensure transcription completed successfully.",
+      { transcriptLength: params.transcript?.length ?? 0 }
+    );
+  }
+
+  const transcriptLength = params.transcript.length;
+  const transcriptWordCount = params.transcript.split(/\s+/).length;
+  try {
+    logger.info(
+      { transcriptLength, transcriptWordCount, model: params.model },
+      `📝 Generating PIP draft from transcript (${transcriptLength} chars, ~${transcriptWordCount} words)`
+    );
+  } catch {
+    console.log(`Generating PIP from transcript (${transcriptLength} chars, ~${transcriptWordCount} words)`);
+  }
+
   const sanitizedTranscript = params.transcript.replace(/<END_TRANSCRIPT>/g, "<END_TRANSCRIPT_ESCAPED>");
   const filledPrompt = promptRaw.split("{request.transcript}").join(sanitizedTranscript);
 
-  const systemPrompt = `You are an HR specialist who drafts detailed, compliant Performance Improvement Plans in ${params.outputLanguage}.`;
+  const systemPrompt = `You are an HR specialist analyzing a meeting transcript. Extract only the performance issues that are explicitly discussed in the transcript. Follow the format instructions exactly. Do not add information not present in the transcript. Output in ${params.outputLanguage}.`;
 
   const text = await anthropicService.generateMessage({
     model: params.model,

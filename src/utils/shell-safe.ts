@@ -29,6 +29,7 @@ import { validateFilePath } from "./validation.js";
 const ALLOWED_COMMANDS = new Set([
   "ffmpeg",
   "ffprobe",
+  "aws",
 ]);
 
 // ============================================================================

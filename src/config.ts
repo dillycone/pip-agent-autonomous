@@ -176,6 +176,48 @@ export const GEMINI_TRANSCRIBE_CONCURRENCY = Math.max(1, Number(process.env.GEMI
 export const GEMINI_TRANSCRIBE_RETRIES = Math.max(0, Number(process.env.GEMINI_TRANSCRIBE_RETRIES || 2));
 
 // ============================================================================
+// S3 + Presigned URL Configuration
+// ============================================================================
+
+/**
+ * AWS CLI profile to use for S3 ops
+ * Default: BCRoot (per user instruction)
+ */
+export const S3_PROFILE = process.env.S3_PROFILE || "BCRoot";
+
+/**
+ * Target S3 bucket for audio uploads
+ * If unset, the app may attempt to create one on the fly
+ */
+export const S3_BUCKET = process.env.S3_BUCKET;
+
+/**
+ * Optional key prefix for uploaded audio objects (no leading slash)
+ * Default: "audio"
+ */
+export const S3_PREFIX = (process.env.S3_PREFIX || "audio").replace(/^\/+|\/+$/g, "");
+
+/**
+ * TTL for presigned URLs in seconds
+ * Default: 3600
+ */
+export const S3_PRESIGN_TTL_SECONDS = Math.max(60, Number(process.env.S3_PRESIGN_TTL_SECONDS || 3600));
+
+/**
+ * Whether to delete S3 object after transcription completes
+ * Default: true
+ */
+export const S3_DELETE_AFTER = String(process.env.S3_DELETE_AFTER || "true").toLowerCase() === "true";
+
+/**
+ * Input mode for Gemini file ingestion
+ * - "presigned" → Upload to S3 and pass presigned URL to Gemini (preferred)
+ * - "upload"    → Upload file to Gemini via SDK
+ * Default: "presigned"
+ */
+export const GEMINI_INPUT_MODE = (process.env.GEMINI_INPUT_MODE || "presigned").toLowerCase();
+
+// ============================================================================
 // File Paths
 // ============================================================================
 

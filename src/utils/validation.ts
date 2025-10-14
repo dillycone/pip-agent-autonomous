@@ -503,7 +503,8 @@ export function validateOutputPath(
   const pathValidation = validateFilePath(outputPath, {
     mustExist: false,
     extensions: opts.extensions,
-    mustBeFile: false
+    mustBeFile: false,
+    allowAbsolute: true
   });
 
   if (!pathValidation.valid) {
