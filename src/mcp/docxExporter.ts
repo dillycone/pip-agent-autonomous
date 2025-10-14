@@ -9,7 +9,7 @@ import { mcpSuccess } from "../utils/mcp-helpers.js";
 import { validateOutputPath } from "../utils/validation.js";
 import { DocumentExportError } from "../errors/index.js";
 import { createChildLogger } from "../utils/logger.js";
-import type { DocxImport, isDocxImport } from "../types/index.js";
+import { isDocxImport, type DocxImport } from "../types/index.js";
 import {
   IFileSystemService,
   createFileSystemService
@@ -59,9 +59,12 @@ export const docxExporter = createSdkMcpServer({
             return mcpSuccess({ outputPath: safeOutputPath });
           } else {
             // Fallback: generate a docx without a template
-            const docxModule = await import("docx") as unknown as DocxImport;
-            const { Document, Packer, Paragraph, HeadingLevel, TextRun } = docxModule;
-            const paragraphs: unknown[] = [];
+            const importedDocx = await import("docx");
+            if (!isDocxImport(importedDocx)) {
+              throw new DocumentExportError("docx module did not expose expected API");
+            }
+            const { Document, Packer, Paragraph, HeadingLevel, TextRun } = importedDocx;
+            const paragraphs: InstanceType<DocxImport["Paragraph"]>[] = [];
             paragraphs.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1 }));
             paragraphs.push(new Paragraph({ text: `Language: ${language}    Date: ${new Date().toISOString().slice(0,10)}` }));
             paragraphs.push(new Paragraph({ text: "" }));

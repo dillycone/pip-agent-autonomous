@@ -50,7 +50,8 @@ import { ConfigurationError } from "./errors/index.js";
 import {
   validateFilePath,
   validateOutputPath,
-  PathValidationError
+  PathValidationError,
+  type ValidationResult
 } from "./utils/validation.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -83,6 +84,12 @@ import {
   isToolUseEvent,
   isToolResultEvent
 } from "./types/index.js";
+
+// Ensure long-running MCP tool calls (Gemini transcription, Claude drafting) have ample time.
+// The Anthropic SDK reads this value when handling MCP requests.
+if (!process.env.MCP_REQUEST_TIMEOUT_MS) {
+  process.env.MCP_REQUEST_TIMEOUT_MS = String(10 * 60 * 1000); // 10 minutes default for long-running MCP calls
+}
 
 const MCP_SERVERS = {
   "gemini-transcriber": geminiTranscriber,
@@ -213,7 +220,7 @@ const audioValidation = validateFilePath(audioPath, {
   mustExist: true,
   mustBeFile: true,
   extensions: [...ALLOWED_AUDIO_EXTENSIONS] as string[],
-  allowAbsolute: false
+  allowAbsolute: true
 });
 
 if (!audioValidation.valid) {
@@ -229,23 +236,29 @@ if (!audioValidation.valid) {
 }
 
 // Validate template path (if not default)
-const templateValidation = validateFilePath(templatePath, {
-  mustExist: true,
-  mustBeFile: true,
-  extensions: [...ALLOWED_TEMPLATE_EXTENSIONS] as string[],
-  allowAbsolute: false
-});
+const userProvidedTemplate = args.has("template");
+let templateValidation: ValidationResult = { valid: true };
+if (userProvidedTemplate || fs.existsSync(templatePath)) {
+  const result = validateFilePath(templatePath, {
+    mustExist: true,
+    mustBeFile: true,
+    extensions: [...ALLOWED_TEMPLATE_EXTENSIONS] as string[],
+    allowAbsolute: true
+  });
 
-if (!templateValidation.valid) {
-  logger.error({
-    templatePath,
-    error: templateValidation.error,
-    hint: templateValidation.hint
-  }, `❌ Template path validation failed: ${templateValidation.error}`);
-  if (templateValidation.hint) {
-    logger.error(`   Hint: ${templateValidation.hint}`);
+  if (!result.valid) {
+    logger.error({
+      templatePath,
+      error: result.error,
+      hint: result.hint
+    }, `❌ Template path validation failed: ${result.error}`);
+    if (result.hint) {
+      logger.error(`   Hint: ${result.hint}`);
+    }
+    process.exit(1);
   }
-  process.exit(1);
+
+  templateValidation = result;
 }
 
 // Validate output path
@@ -266,11 +279,16 @@ if (!outputValidation.valid) {
   process.exit(1);
 }
 
-logger.debug({
+const templateSanitizedPath = templateValidation.sanitizedPath ?? templatePath;
+const pathDebugContext: Record<string, unknown> = {
   audioPath: audioValidation.sanitizedPath,
-  templatePath: templateValidation.sanitizedPath,
-  outputPath: outputValidation.sanitizedPath
-}, "✅ All file paths validated successfully");
+  outputPath: outputValidation.sanitizedPath,
+  templateProvided: userProvidedTemplate || fs.existsSync(templatePath)
+};
+if (templateValidation.sanitizedPath) {
+  pathDebugContext.templatePath = templateValidation.sanitizedPath;
+}
+logger.debug(pathDebugContext, "✅ All file paths validated successfully");
 
 const guidelinesText = fs.readFileSync(GUIDELINES_PATH, "utf-8");
 const judgeAgent = makePolicyJudgeAgent(guidelinesText, outputLanguage);
@@ -283,12 +301,16 @@ function buildPipelinePrompt() {
     diarize: true,
     timestamps: true
   };
+  const transcriptionArgsExample = {
+    ...transcriptionArgs,
+    startChunk: 0
+  };
   const pipDraftArgs = {
     transcript: "<REPLACE_WITH_TRANSCRIPT>",
     outputLanguage
   };
   const docxArgs = {
-    templatePath,
+    templatePath: templateSanitizedPath,
     outputPath,
     language: outputLanguage,
     title: "Performance Improvement Plan",
@@ -302,7 +324,9 @@ function buildPipelinePrompt() {
     "- mcp__pip-generator__draft_pip → create a draft PIP from a transcript.",
     "- mcp__docx-exporter__render_docx → produce the final DOCX file.",
     "STEPS:",
-    `1. Call the transcription tool exactly once with the following JSON arguments:\n${JSON.stringify(transcriptionArgs, null, 2)}\n   If the tool response JSON has ok !== true, immediately respond with {\"status\":\"error\",\"message\":<tool-error>}. Otherwise set TRANSCRIPT to response.transcript; if missing, join non-empty segment texts. Trim whitespace and ensure TRANSCRIPT is non-empty.`,
+    `1. Initialize CURRENT_CHUNK=0 and TRANSCRIPTS=[] (strings). Call the transcription tool with the following JSON arguments (include "startChunk": CURRENT_CHUNK):
+${JSON.stringify(transcriptionArgsExample, null, 2)}
+   After each successful call (response.ok === true), append any non-empty response.transcript to TRANSCRIPTS and merge response.segments into an aggregate SEGMENTS list. If response.nextChunk is a number, set CURRENT_CHUNK to that value and call the tool again with startChunk=CURRENT_CHUNK. Repeat until nextChunk is null or undefined. If any call returns ok !== true, immediately respond with {"status":"error","message":<tool-error>}. Once finished, join TRANSCRIPTS with two newlines, trim whitespace, and set TRANSCRIPT to that string (ensure it is non-empty).`,
     `2. Call the PIP generator tool with JSON arguments matching:\n${JSON.stringify(pipDraftArgs, null, 2)}\n   Replace the placeholder value with TRANSCRIPT. Expect JSON { ok: true, draft }. On failure, return {\"status\":\"error\",\"message\":<tool-error>}. Set CURRENT_DRAFT to draft.trim().`,
     `3. Send CURRENT_DRAFT to the subagent "policy-judge" for review. If the verdict approved=false, apply required_changes (and revised_draft if provided) to produce a new CURRENT_DRAFT. Repeat the judge loop until approved=true or you reach ${MAX_REVIEW_ROUNDS} review rounds. Do not call pip-generator again during revisions. If you cannot secure approval, return {\"status\":\"error\",\"message\":\"Unable to obtain approval\"}.`,
     `4. When approved=true, set APPROVED_DRAFT to the final CURRENT_DRAFT.`,
@@ -388,6 +412,26 @@ async function run() {
         const sanitizedContent = sanitizeForLogging(eventData.content);
         logger.warn({ toolName: eventData.name, error: sanitizedContent }, `  ⚠️  Tool ${eventData.name} returned error`);
         logger.warn(`     ${safeStringify(sanitizedContent, 200)}`);
+        const rawText = Array.isArray(eventData.content)
+          ? eventData.content.find(part => typeof part?.text === "string")?.text
+          : typeof eventData.content === "string"
+            ? eventData.content
+            : null;
+        if (typeof rawText === "string") {
+          try {
+            const parsed = JSON.parse(rawText);
+            const hint = typeof parsed?.hint === "string"
+              ? parsed.hint
+              : typeof parsed?.details?.hint === "string"
+                ? parsed.details.hint
+                : undefined;
+            if (hint) {
+              logger.warn(`     Hint: ${hint}`);
+            }
+          } catch {
+            // Ignore JSON parse failures; already logged sanitized payload
+          }
+        }
       }
     }
 

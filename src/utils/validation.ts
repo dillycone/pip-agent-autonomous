@@ -252,8 +252,9 @@ export function validateFilePath(
 
   // Ensure normalized path is still within base directory (prevent traversal via normalization)
   if (!opts.allowAbsolute) {
-    const normalizedBase = path.normalize(opts.baseDir);
-    if (!normalizedPath.startsWith(normalizedBase)) {
+    const normalizedBase = path.resolve(opts.baseDir);
+    const relative = path.relative(normalizedBase, normalizedPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
       return {
         valid: false,
         error: "Path escapes base directory",

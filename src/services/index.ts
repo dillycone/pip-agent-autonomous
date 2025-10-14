@@ -32,17 +32,21 @@
 
 // Anthropic Service
 export {
-  IAnthropicService,
   AnthropicService,
-  createAnthropicService,
+  createAnthropicService
+} from "./AnthropicService.js";
+export type {
+  IAnthropicService,
   MessageParams
 } from "./AnthropicService.js";
 
 // Gemini Service
 export {
-  IGeminiService,
   GeminiService,
-  createGeminiService,
+  createGeminiService
+} from "./GeminiService.js";
+export type {
+  IGeminiService,
   UploadedFile,
   GenerateContentParams,
   GenerateContentResult
@@ -50,9 +54,11 @@ export {
 
 // File System Service
 export {
-  IFileSystemService,
   FileSystemService,
-  createFileSystemService,
+  createFileSystemService
+} from "./FileSystemService.js";
+export type {
+  IFileSystemService,
   MkdirOptions
 } from "./FileSystemService.js";
 

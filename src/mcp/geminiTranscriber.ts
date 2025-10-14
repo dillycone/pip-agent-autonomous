@@ -1,7 +1,6 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import mime from "mime";
@@ -24,8 +23,6 @@ import {
 } from "../config.js";
 import type {
   AudioProbeData,
-  GeminiUploadResponse,
-  GeminiGenerateResponse,
   GeminiTranscriptionResult,
   GeminiRawSegment
 } from "../types/index.js";
@@ -41,8 +38,21 @@ const logger = createChildLogger("gemini-transcriber");
 
 // Create filesystem service once at module level for reuse
 const fsService: IFileSystemService = createFileSystemService();
+let geminiService: IGeminiService | null = null;
+function getGeminiService(): IGeminiService {
+  if (!GEMINI_API_KEY) {
+    throw new ConfigurationError("Missing GEMINI_API_KEY");
+  }
+  if (!geminiService) {
+    geminiService = createGeminiService(GEMINI_API_KEY);
+  }
+  return geminiService;
+}
+let geminiService: IGeminiService | null = null;
 
 const MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024;
+const MIN_CHUNK_SECONDS = 10;
+const MAX_CHUNKS_PER_CALL = 4;
 
 /**
  * Format bytes to human-readable size (e.g., "200MB")
@@ -67,6 +77,73 @@ type NormalizedSegment = {
 
 function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function hasTimeoutSignal(value: unknown, seen: WeakSet<object> = new WeakSet()): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  if (typeof value === "string") {
+    const lower = value.toLowerCase();
+    return (
+      lower.includes("timeout") ||
+      lower.includes("timed out") ||
+      lower.includes("deadline exceeded")
+    );
+  }
+
+  if (typeof value === "number") {
+    return value === 408;
+  }
+
+  if (value instanceof Error) {
+    return hasTimeoutSignal(value.message, seen);
+  }
+
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (seen.has(obj)) {
+      return false;
+    }
+    seen.add(obj);
+
+    const keysToInspect = ["message", "error", "status", "statusText", "code", "reason"];
+    for (const key of keysToInspect) {
+      const field = obj[key];
+      if (typeof field === "string" || typeof field === "number") {
+        if (hasTimeoutSignal(field, seen)) {
+          return true;
+        }
+      }
+    }
+
+    const cause = (obj as { cause?: unknown }).cause;
+    if (cause && hasTimeoutSignal(cause, seen)) {
+      return true;
+    }
+
+    const metadata = (obj as { metadata?: unknown }).metadata;
+    if (metadata && hasTimeoutSignal(metadata, seen)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isTimeoutLikeError(error: unknown): boolean {
+  if (error instanceof TranscriptionError) {
+    const metadata = error.metadata;
+    if (metadata && typeof metadata === "object") {
+      const reason = (metadata as { reason?: unknown }).reason;
+      if (typeof reason === "string" && reason.toLowerCase() === "timeout") {
+        return true;
+      }
+    }
+  }
+
+  return hasTimeoutSignal(error);
 }
 
 async function runWithConcurrency<T>(
@@ -371,35 +448,19 @@ function normalizeSegments(rawSegments: GeminiRawSegment[], offsetSeconds: numbe
 async function transcribeChunk(params: {
   filePath: string;
   offsetSeconds: number;
-  ai: unknown;
+  gemini: IGeminiService;
   modelId: string;
   instructionsBase: string[];
 }) {
-  const { filePath, offsetSeconds, ai, modelId, instructionsBase } = params;
+  const { filePath, offsetSeconds, gemini, modelId, instructionsBase } = params;
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= GEMINI_TRANSCRIBE_RETRIES; attempt++) {
     try {
       const mimeType = mime.getType(filePath) || "audio/wav";
 
-      // Type guard for Gemini AI instance
-      const geminiAI = ai as {
-        files: {
-          upload: (options: { file: string; config: { mimeType: string } }) => Promise<unknown>;
-        };
-        models: {
-          generateContent: (options: unknown) => Promise<unknown>;
-        };
-      };
-
-      const uploaded = await geminiAI.files.upload({
-        file: filePath,
-        config: { mimeType }
-      });
-
-      const uploadResponse = uploaded as GeminiUploadResponse;
-      const uploadedFile = uploadResponse.file ?? uploadResponse;
-      const fileUri: string | undefined = uploadedFile.uri ?? uploadedFile.fileUri;
-      const fileMime: string = uploadedFile.mimeType ?? uploadedFile.fileMimeType ?? mimeType;
+      const uploaded = await gemini.uploadFile(filePath, mimeType);
+      const fileUri: string | undefined = uploaded.uri ?? uploaded.fileUri;
+      const fileMime: string = uploaded.mimeType ?? uploaded.fileMimeType ?? mimeType;
       if (!fileUri) {
         throw new Error("Upload failed: missing file URI");
       }
@@ -411,7 +472,7 @@ async function transcribeChunk(params: {
 
       const instructions = [...instructionsBase, offsetInstruction].join("\n");
 
-      const result = await geminiAI.models.generateContent({
+      const result = await gemini.generateContent({
         model: modelId,
         contents: [
           {
@@ -425,8 +486,7 @@ async function transcribeChunk(params: {
         config: { responseMimeType: "application/json" }
       });
 
-      const geminiResponse = result as GeminiGenerateResponse;
-      const text: string = geminiResponse.text ?? geminiResponse.response?.text?.() ?? "";
+      const text: string = result.text ?? result.response?.text?.() ?? "";
       const cleaned = String(text).replace(/```json|```/g, "").trim();
 
       let parsed: unknown;
@@ -465,10 +525,36 @@ async function transcribeChunk(params: {
       break;
     }
   }
-  throw lastError;
+  const baseError = lastError ?? new Error("Unknown transcription failure");
+  const sanitized = sanitizeError(baseError);
+  const timeout = isTimeoutLikeError(baseError) || hasTimeoutSignal(sanitized);
+  const metadata: Record<string, unknown> = {
+    chunkOffsetSeconds: offsetSeconds,
+    chunkPath: sanitizePath(filePath),
+    attempts: GEMINI_TRANSCRIBE_RETRIES + 1,
+    cause: sanitized
+  };
+
+  if (timeout) {
+    metadata.reason = "timeout";
+  }
+
+  throw new TranscriptionError(
+    timeout ? "Transcription chunk timed out" : sanitized.message || "Transcription failed",
+    metadata
+  );
 }
 
-function buildSuccess(transcript: string, segments: NormalizedSegment[]) {
+function buildSuccess(
+  transcript: string,
+  segments: NormalizedSegment[],
+  nextChunk: number | null,
+  info?: {
+    totalChunks?: number;
+    processedChunks?: number;
+    startChunk?: number;
+  }
+) {
   const printableSegments = segments
     .filter(seg => seg.text)
     .map(seg => ({
@@ -477,10 +563,23 @@ function buildSuccess(transcript: string, segments: NormalizedSegment[]) {
       speaker: seg.speaker,
       text: seg.text
     }));
-  return mcpSuccess({
+  const payload: Record<string, unknown> = {
     transcript: transcript.trim(),
     segments: printableSegments
-  });
+  };
+  if (nextChunk !== null && Number.isFinite(nextChunk)) {
+    payload.nextChunk = nextChunk;
+  }
+  if (info?.totalChunks !== undefined) {
+    payload.totalChunks = info.totalChunks;
+  }
+  if (info?.processedChunks !== undefined) {
+    payload.processedChunks = info.processedChunks;
+  }
+  if (info?.startChunk !== undefined) {
+    payload.startChunk = info.startChunk;
+  }
+  return mcpSuccess(payload);
 }
 
 // We use the new Google Gen AI SDK (@google/genai).
@@ -498,9 +597,10 @@ export const geminiTranscriber = createSdkMcpServer({
         inputLanguage: z.string().default("auto").describe("Audio language hint, e.g., 'en-US', 'es-ES', or 'auto'"),
         outputLanguage: z.string().default("en").describe("Transcript target language, e.g., 'en', 'fr'"),
         diarize: z.boolean().default(true),
-        timestamps: z.boolean().default(true)
+        timestamps: z.boolean().default(true),
+        startChunk: z.number().int().min(0).default(0).describe("Optional start chunk index for paginated transcription")
       },
-      async ({ audioPath, inputLanguage, outputLanguage, diarize, timestamps }) => {
+      async ({ audioPath, inputLanguage, outputLanguage, diarize, timestamps, startChunk }) => {
         try {
           if (!GEMINI_API_KEY) {
             throw new ConfigurationError("Missing GEMINI_API_KEY");
@@ -548,8 +648,7 @@ export const geminiTranscriber = createSdkMcpServer({
             }
           }
 
-          const { GoogleGenAI } = await import("@google/genai");
-          const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+          const gemini = getGeminiService();
 
           const instructionsBase = [
             "You are a professional HR meeting transcriber.",
@@ -566,51 +665,85 @@ export const geminiTranscriber = createSdkMcpServer({
 
           const duration = await probeDuration(validatedAudioPath);
           const chunkSeconds = GEMINI_CHUNK_SECONDS;
-          const shouldChunk = duration === null ? true : duration > Math.min(GEMINI_SINGLE_PASS_MAX, chunkSeconds);
+          const shouldChunk = duration === null ? true : duration > GEMINI_SINGLE_PASS_MAX;
 
           const runSingle = async () => {
             logger.info("🎤 Transcribing audio (single pass)...");
             const res = await transcribeChunk({
               filePath: validatedAudioPath,
               offsetSeconds: 0,
-              ai,
+              gemini,
               modelId,
               instructionsBase
             });
             const transcript =
-              res.transcript.trim() ||
-              res.segments.map(seg => seg.text).join("\n").trim();
-            return buildSuccess(transcript, res.segments);
-          };
+          res.transcript.trim() ||
+          res.segments.map(seg => seg.text).join("\n").trim();
+        return buildSuccess(transcript, res.segments, null, {
+          totalChunks: 1,
+          processedChunks: 1,
+          startChunk: 0
+        });
+      };
 
           if (!shouldChunk) {
             return await runSingle();
           }
 
+          const normalizedStartChunk =
+            Number.isFinite(startChunk) && startChunk > 0
+              ? Math.floor(startChunk)
+              : 0;
+
           let tmpDir: string | null = null;
           try {
             const split = await splitAudio(validatedAudioPath, chunkSeconds);
             tmpDir = split.tmpDir;
-            if (!split.chunks.length) {
+            const totalChunks = split.chunks.length;
+
+            if (!totalChunks) {
               return await runSingle();
             }
 
+            if (normalizedStartChunk >= totalChunks) {
+              return buildSuccess("", [], null, {
+                totalChunks,
+                processedChunks: 0,
+                startChunk: normalizedStartChunk
+              });
+            }
+
+            const remainingChunks = totalChunks - normalizedStartChunk;
+            const batchSize = Math.min(MAX_CHUNKS_PER_CALL, Math.max(1, remainingChunks));
+            const selectedChunks = split.chunks.slice(
+              normalizedStartChunk,
+              normalizedStartChunk + batchSize
+            );
+
             const chunkResults = await runWithConcurrency(
-              split.chunks,
+              selectedChunks,
               chunk =>
                 transcribeChunk({
                   filePath: chunk.path,
                   offsetSeconds: chunk.offsetSeconds,
-                  ai,
+                  gemini,
                   modelId,
                   instructionsBase
                 }),
               (completed, total) => {
-                const percentage = Math.floor((completed / total) * 100);
-                // Report every 10% or every 5 chunks, whichever is more frequent
-                const reportInterval = Math.max(1, Math.min(5, Math.ceil(total * 0.1)));
-                if (completed % reportInterval === 0 || completed === total) {
-                  logger.info({ completed, total, percentage }, `📝 Transcribed ${completed}/${total} chunks (${percentage}%)`);
+                const absoluteCompleted = normalizedStartChunk + completed;
+                const reportInterval = Math.max(1, Math.min(5, Math.ceil(totalChunks * 0.1)));
+                if (absoluteCompleted % reportInterval === 0 || completed === total) {
+                  const percentage = Math.floor((absoluteCompleted / totalChunks) * 100);
+                  logger.info(
+                    {
+                      completed: absoluteCompleted,
+                      total: totalChunks,
+                      percentage,
+                      chunkSeconds
+                    },
+                    `📝 Transcribed ${absoluteCompleted}/${totalChunks} chunks (${percentage}%)`
+                  );
                 }
               }
             );
@@ -624,7 +757,16 @@ export const geminiTranscriber = createSdkMcpServer({
               transcriptParts.join("\n\n").trim() ||
               mergedSegments.map(seg => seg.text).join("\n").trim();
 
-            return buildSuccess(transcript, mergedSegments);
+            const nextChunkIndex =
+              normalizedStartChunk + selectedChunks.length < totalChunks
+                ? normalizedStartChunk + selectedChunks.length
+                : null;
+
+            return buildSuccess(transcript, mergedSegments, nextChunkIndex, {
+              totalChunks,
+              processedChunks: selectedChunks.length,
+              startChunk: normalizedStartChunk
+            });
           } finally {
             if (tmpDir) {
               await cleanupTempDir(tmpDir);
@@ -661,6 +803,13 @@ export const geminiTranscriber = createSdkMcpServer({
             }
           }
 
+          logger.warn(
+            {
+              error: sanitized,
+              hint
+            },
+            "Gemini transcription tool failed"
+          );
           return mcpError(message, hint ? { ...sanitized, hint } : sanitized);
         }
       }

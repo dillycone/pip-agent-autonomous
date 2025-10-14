@@ -19,6 +19,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import type { TextBlock } from "@anthropic-ai/sdk/resources/messages";
 
 /**
  * Parameters for message generation
@@ -98,7 +99,7 @@ export class AnthropicService implements IAnthropicService {
 
     // Extract and join all text blocks from the response
     const text = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .filter((block): block is TextBlock => block.type === "text")
       .map(block => block.text)
       .join("")
       .trim();

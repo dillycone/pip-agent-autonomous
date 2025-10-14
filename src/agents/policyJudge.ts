@@ -21,7 +21,8 @@ OUTPUT CONTRACT (JSON ONLY; no markdown, no prose):
 Rules:
 - If approved=false, propose a revised_draft that fixes issues while preserving the original structure and the author's intent when possible.
 - Always write in ${outputLanguage}.
-- NEVER include names or sensitive details not present in the draft.
+- Flag any personal names that cannot be confirmed as originating from the transcript and require replacing them with "the employee" unless the name is explicitly confirmed in the provided materials.
+- NEVER include names or sensitive details not present in the original transcript.
 `
   };
 }

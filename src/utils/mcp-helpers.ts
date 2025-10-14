@@ -6,17 +6,7 @@
  * sanitization and redaction of sensitive data.
  */
 
-/**
- * Standard MCP tool result structure.
- * All MCP tools should return this format for consistency.
- */
-export interface MCPToolResult {
-  content: Array<{
-    type: "text";
-    text: string;
-  }>;
-  isError?: boolean;
-}
+import type { MCPToolResult } from "../types/index.js";
 
 /**
  * Structure for successful MCP responses.

@@ -12,7 +12,8 @@
  */
 
 import { spawn, SpawnOptions } from "node:child_process";
-import { validateFilePath, sanitizeForShellCommand } from "./validation.js";
+import { extname } from "node:path";
+import { validateFilePath } from "./validation.js";
 
 // ============================================================================
 // Command Whitelist
@@ -144,7 +145,6 @@ function validateArguments(
       // Use the sanitized path
       validatedArgs.push(validation.sanitizedPath!);
     } else {
-      // For non-path arguments, sanitize shell metacharacters
       validatedArgs.push(arg);
     }
   }
@@ -161,20 +161,16 @@ function validateArguments(
  */
 function isFilePath(arg: string, previousArg?: string): boolean {
   // Check if previous argument was a file-related flag
-  const fileFlags = ["-i", "-o", "--input", "--output", "-f", "--file"];
+  const fileFlags = ["-i", "-o", "--input", "--output", "--file"];
   if (previousArg && fileFlags.includes(previousArg)) {
     return true;
   }
 
-  // Check if argument looks like a file path
-  // Has file extension or starts with / or ./ or contains path separators
-  return (
-    arg.includes("/") ||
-    arg.includes("\\") ||
-    arg.startsWith("./") ||
-    arg.startsWith("../") ||
-    /\.[a-zA-Z0-9]{2,4}$/.test(arg) // Has file extension
-  );
+  const hasSeparator = arg.includes("/") || arg.includes("\\");
+  const hasRelativePrefix = arg.startsWith("./") || arg.startsWith("../");
+  const hasExtension = Boolean(extname(arg));
+
+  return hasSeparator || hasRelativePrefix || hasExtension;
 }
 
 // ============================================================================

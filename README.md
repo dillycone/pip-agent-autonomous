@@ -36,8 +36,8 @@ GEMINI_API_KEY=your_gemini_key
 - For production deployments, use a secrets manager (AWS Secrets Manager, Azure Key Vault, Google Secret Manager, etc.)
 - Rotate API keys immediately if they are ever exposed
 
-3) **Put your audio** in `uploads/` (e.g., `uploads/meeting.mp3`).  
-   Optionally, place a Word template in `templates/pip-template.docx` containing the tag `{pip_body}`.
+3) **Put your audio** in `uploads/` (e.g., `uploads/meeting.mp3`) or point to an absolute path.  
+   Optionally, place a Word template in `templates/pip-template.docx` containing the tag `{pip_body}`. If the template is missing, the exporter falls back automatically.
 
 4) **Run**
 ```bash
@@ -47,10 +47,14 @@ Flags:
 - `--audio` (required): path to your audio
 - `--in` (optional): input audio language (e.g., `en-US`, `es-ES`, or `auto`), default `auto`
 - `--out` (optional): output language for transcript + draft (e.g., `en`, `fr`), default `en`
-- `--template` (optional): .docx template with `{pip_body}` tag
-- `--outdoc` (optional): output .docx path (default `exports/pip-<timestamp>.docx`)
+- `--template` (optional): .docx template with `{pip_body}` tag. Omit it to auto-generate formatting.
+- `--outdoc` (optional): output .docx path (default `exports/pip-<timestamp>.docx`). Only `.docx` is supported currently.
 
-> If no template is supplied or found, the exporter will **generate** a nicely formatted `.docx` automatically.
+Example without a template (fallback export):
+
+```bash
+npm run dev -- --audio /absolute/path/to/meeting.mp3 --outdoc exports/PIP.docx
+```
 
 ## ASCII flow
 
@@ -126,4 +130,3 @@ For detailed documentation:
 - **Transcription fails**: verify `GEMINI_API_KEY` and supported audio type (`.mp3/.wav/.flac` etc.).  
 - **Template errors**: remove the `--template` flag to let the fallback generator create a docx.  
 - **Judge loops**: adjust `MAX_REVIEW_ROUNDS` in `src/main.ts` or strengthen your `policies/guidelines.txt`.  
-

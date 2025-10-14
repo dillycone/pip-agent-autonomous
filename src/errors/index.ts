@@ -85,21 +85,5 @@ export class ConfigurationError extends AppError {
   }
 }
 
-/**
- * Error thrown when path validation fails or path traversal is detected.
- * Used for: directory traversal attempts, invalid paths, security violations.
- */
-export class PathValidationError extends AppError {
-  constructor(message: string, metadata?: ErrorMetadata) {
-    super(
-      message,
-      "PATH_VALIDATION_ERROR",
-      400,
-      metadata,
-      true
-    );
-  }
-}
-
 // Re-export AppError for convenience
 export { AppError } from "./BaseError.js";

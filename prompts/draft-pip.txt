@@ -22,16 +22,16 @@
     [Paragraph describing the issue in detail]
 
     Examples:
-    • [Example 1 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
-    • [Example 2 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
-    • [Example 3 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+    • [Example 1 with appropriate detail. Should not use direct quoting from transcript. Use the employee's name if it appears in the transcript; otherwise refer to "the employee" instead of pronouns.]
+    • [Example 2 with appropriate detail. Should not use direct quoting from transcript. Use the employee's name if it appears in the transcript; otherwise refer to "the employee" instead of pronouns.]
+    • [Example 3 with appropriate detail. Should not use direct quoting from transcript. Use the employee's name if it appears in the transcript; otherwise refer to "the employee" instead of pronouns.]
 
     2: [Heading]
     
     [Paragraph describing the issue in detail]
 
     Examples:
-    • [Example 1 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
-    • [Example 2 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
-    • [Example 3 with appropriate detail. Should not use direct quoting from transcript. Use the individual's name instead of pronouns such as he or she or you.]
+    • [Example 1 with appropriate detail. Should not use direct quoting from transcript. Use the employee's name if it appears in the transcript; otherwise refer to "the employee" instead of pronouns.]
+    • [Example 2 with appropriate detail. Should not use direct quoting from transcript. Use the employee's name if it appears in the transcript; otherwise refer to "the employee" instead of pronouns.]
+    • [Example 3 with appropriate detail. Should not use direct quoting from transcript. Use the employee's name if it appears in the transcript; otherwise refer to "the employee" instead of pronouns.]
 </response_format>

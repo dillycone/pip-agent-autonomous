@@ -237,8 +237,7 @@ export const ALLOWED_TEMPLATE_EXTENSIONS = [
  * Whitelist of safe document formats for output
  */
 export const ALLOWED_OUTPUT_EXTENSIONS = [
-  ".docx",
-  ".pdf"
+  ".docx"
 ] as const;
 
 // ============================================================================
@@ -287,13 +286,37 @@ export const PRICING = {
  */
 export function parseCliArgs(): Map<string, string> {
   const args = new Map<string, string>();
-  for (let i = 2; i < process.argv.length; i += 2) {
-    const k = process.argv[i];
-    const v = process.argv[i + 1];
-    if (k && v && k.startsWith("--")) {
-      args.set(k.slice(2), v);
+  const tokens = process.argv.slice(2);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token.startsWith("--")) {
+      continue;
     }
+
+    const trimmed = token.slice(2);
+    if (!trimmed) {
+      continue;
+    }
+
+    const equalsIndex = trimmed.indexOf("=");
+    if (equalsIndex !== -1) {
+      const key = trimmed.slice(0, equalsIndex);
+      const value = trimmed.slice(equalsIndex + 1);
+      args.set(key, value || "true");
+      continue;
+    }
+
+    const nextToken = tokens[i + 1];
+    if (!nextToken || nextToken.startsWith("--")) {
+      args.set(trimmed, "true");
+      continue;
+    }
+
+    args.set(trimmed, nextToken);
+    i += 1;
   }
+
   return args;
 }
 

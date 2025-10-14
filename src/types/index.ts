@@ -8,8 +8,7 @@ import type {
   SDKAssistantMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
-  SDKSystemMessage,
-  NonNullableUsage
+  SDKSystemMessage
 } from "@anthropic-ai/claude-agent-sdk";
 
 // ===== MCP Tool Result Types =====

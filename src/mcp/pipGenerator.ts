@@ -2,7 +2,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import * as path from "node:path";
 import { sanitizeError } from "../utils/sanitize.js";
-import { mcpError, safeStringify } from "../utils/safe-stringify.js";
+import { mcpError } from "../utils/safe-stringify.js";
 import { mcpSuccess } from "../utils/mcp-helpers.js";
 import { PIPGenerationError, ConfigurationError } from "../errors/index.js";
 import {
