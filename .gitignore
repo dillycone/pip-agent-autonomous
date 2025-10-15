@@ -9,6 +9,11 @@ pnpm-debug.log*
 dist/
 build/
 *.tsbuildinfo
+.next/
+apps/ui/.next/
+apps/ui/dist/
+apps/ui/vendor-chunks/
+apps/ui/trace/
 
 # Environment variables
 .env
@@ -54,3 +59,13 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Claude Code
+.claude/
+
+# Exported documents
+exports/
+
+# Backup/generated files
+*.docx
+*\ 2.ts

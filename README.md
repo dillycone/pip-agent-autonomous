@@ -63,6 +63,8 @@ npm run dev -- --audio /absolute/path/to/meeting.mp3 --outdoc exports/PIP.docx
    └─ audio + languages (in/out) + keys in .env
         ▼
 [Gemini 2.5 Pro Transcriber  (MCP tool)]
+   ├─ Attempt single-pass transcription first (up to 9.5 hours supported)
+   ├─ On timeout/too-large: automatic fallback to chunked transcription
    └─ transcript (outLang), segments[]
         ▼
 [Claude Agent SDK  (claude-sonnet-4-5-20250929)]
@@ -75,14 +77,30 @@ npm run dev -- --audio /absolute/path/to/meeting.mp3 --outdoc exports/PIP.docx
    └─ exports/PIP.docx
 ```
 
+## Transcription Strategy
+
+The pipeline uses an intelligent transcription approach:
+
+1. **Always attempt single-pass first** - Regardless of audio duration, the system first attempts to transcribe the entire file in one pass using Gemini 2.5 Pro (which supports up to 9.5 hours of audio).
+
+2. **Automatic fallback to chunking** - Only if Gemini explicitly fails (timeout or file too large), the system automatically falls back to chunked transcription with the following process:
+   - Splits audio into 30-second chunks using ffmpeg
+   - Transcribes chunks in parallel (configurable concurrency)
+   - Merges segments with proper timestamp alignment
+   - Automatic retries for failed chunks
+
+3. **Presigned URL mode (default)** - Uploads audio to S3 and passes presigned URL to Gemini for audit logging while using Gemini's File API for transcription.
+
+This approach optimizes for speed (single-pass is faster) while maintaining reliability (chunking as fallback).
+
 ## Files of interest
 
 - `src/main.ts` — Orchestrates the autonomous end‑to‑end run using the Agent SDK (streaming mode).  
 - `src/mcp/geminiTranscriber.ts` — MCP tool that calls **Gemini 2.5 Pro** to transcribe audio with language control.  
 
-## S3 Presigned URL Mode (No Chunking)
+## S3 Presigned Audit Mode
 
-This project can upload audio to S3 and pass a presigned URL to Gemini instead of uploading the file or chunking locally. This is now the default behavior.
+You can optionally keep an audit copy of each audio file in S3 while still using the Gemini SDK upload path. The default mode is `upload` (direct SDK). Set `GEMINI_INPUT_MODE=presigned` to store an S3 copy first (useful for compliance) and then upload the same local file to Gemini.
 
 Env config (see `.env.example`):
 
@@ -91,12 +109,12 @@ Env config (see `.env.example`):
 - `S3_PREFIX` — Key prefix for uploads (default `audio`)
 - `S3_PRESIGN_TTL_SECONDS` — URL TTL in seconds (default `3600`)
 - `S3_DELETE_AFTER` — Delete object after transcription (default `true`)
-- `GEMINI_INPUT_MODE` — `presigned` (default) or `upload`
+- `GEMINI_INPUT_MODE` — `upload` (default) or `presigned` (audit copy then SDK upload)
 
 Notes:
 
 - For first use, ensure the profile has `s3:*` and `sts:GetCallerIdentity` permissions.
-- If presigned single-pass fails (e.g., timeout), the tool falls back to the legacy path (SDK upload, then chunking if needed).
+- If presigned single-pass fails (e.g., timeout), the tool falls back to the direct SDK upload path (and chunking if needed). The S3 object is cleaned up automatically.
 - `src/mcp/docxExporter.ts` — MCP tool that fills a DOCX template with `{pip_body}`, or generates a fallback DOCX.  
 - `src/agents/policyJudge.ts` — Subagent that judges the draft against your **policies/guardrails**.  
 - `prompts/draft-pip.txt` — Your exact drafting prompt (already included).  
@@ -145,6 +163,7 @@ For detailed documentation:
 
 ## Troubleshooting
 
-- **Transcription fails**: verify `GEMINI_API_KEY` and supported audio type (`.mp3/.wav/.flac` etc.).  
-- **Template errors**: remove the `--template` flag to let the fallback generator create a docx.  
-- **Judge loops**: adjust `MAX_REVIEW_ROUNDS` in `src/main.ts` or strengthen your `policies/guidelines.txt`.  
+- **Transcription fails**: verify `GEMINI_API_KEY` and supported audio type (`.mp3/.wav/.flac` etc.).
+- **Template errors**: remove the `--template` flag to let the fallback generator create a docx.
+- **Judge loops**: review rounds are capped at 1 (set `MAX_REVIEW_ROUNDS=0` in the environment to skip the judge entirely).
+- **Unexpected chunking**: If you see chunking for short audio files, check logs for the fallback reason (timeout or file-too-large). Single-pass is always attempted first.  

@@ -340,7 +340,7 @@ policy-judge
 ### Reduce latency
 - Use shorter audio files (or chunking will auto-enable)
 - Keep PIP template simple
-- Reduce MAX_REVIEW_ROUNDS if approval isn't critical
+- Judge review now runs at most once (set `MAX_REVIEW_ROUNDS=0` to bypass if latency is critical)
 
 ### Reduce costs
 - Use prompt caching (automatic in SDK)
