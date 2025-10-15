@@ -149,7 +149,11 @@ function extractGeminiTokenUsage(content: unknown): {
     const output =
       toNumber((usage as Record<string, unknown>).outputTokens) ??
       toNumber((usage as Record<string, unknown>).candidatesTokenCount) ??
-      toNumber((usage as Record<string, unknown>).candidatesTokens);
+      toNumber((usage as Record<string, unknown>).responseTokenCount) ??
+      toNumber((usage as Record<string, unknown>).response_token_count) ??
+      toNumber((usage as Record<string, unknown>).candidatesTokens) ??
+      toNumber((usage as Record<string, unknown>).responseTokens) ??
+      toNumber((usage as Record<string, unknown>).response_tokens);
 
     const total =
       toNumber((usage as Record<string, unknown>).totalTokens) ??

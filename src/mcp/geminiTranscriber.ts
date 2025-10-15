@@ -167,8 +167,12 @@ function extractTokenUsageFromMetadata(metadata?: Record<string, unknown> | null
     toNumber(raw.candidates_token_count) ??
     toNumber(raw.outputTokenCount) ??
     toNumber(raw.output_token_count) ??
+    toNumber(raw.responseTokenCount) ??
+    toNumber(raw.response_token_count) ??
     toNumber(raw.candidatesTokens) ??
-    toNumber(raw.outputTokens);
+    toNumber(raw.outputTokens) ??
+    toNumber(raw.responseTokens) ??
+    toNumber(raw.response_tokens);
 
   const total =
     toNumber(raw.totalTokenCount) ??
