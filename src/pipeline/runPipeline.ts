@@ -17,6 +17,7 @@ import {
 } from "../types/index.js";
 import { sanitizeError, sanitizePath } from "../utils/sanitize.js";
 import { TokenCostTracker } from "../utils/costTracker.js";
+import { extractGeminiTokenUsage } from "../utils/geminiTokenUsage.js";
 import type { RunStatus } from "../server/runStore.js";
 
 const MCP_SERVERS = {
@@ -328,6 +329,10 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
             isError: (eventData as { isError?: boolean }).isError,
             content: (eventData as { content?: unknown }).content
           };
+          const usage =
+            resultData.name?.includes("gemini-transcriber")
+              ? extractGeminiTokenUsage(resultData.content)
+              : null;
           const finishedAt = new Date().toISOString();
           const inflight = resultData.name ? popInflight(resultData.name) : undefined;
           const id = inflight?.id ?? toolId(resultData.name || "tool");
@@ -341,6 +346,14 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
             finishedAt,
             durationMs
           });
+
+          if (usage) {
+            costTracker.recordTotals({
+              geminiInputTokens: usage.inputTokens,
+              geminiOutputTokens: usage.outputTokens
+            });
+            pushCost();
+          }
 
           const name = resultData.name;
           if (name?.includes("gemini-transcriber")) {
