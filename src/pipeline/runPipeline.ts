@@ -17,6 +17,7 @@ import {
 } from "../types/index.js";
 import { sanitizeError, sanitizePath } from "../utils/sanitize.js";
 import { TokenCostTracker } from "../utils/costTracker.js";
+import { normalizeGeminiTokenUsage } from "../utils/geminiUsage.js";
 import type { RunStatus } from "../server/runStore.js";
 
 const MCP_SERVERS = {
@@ -382,7 +383,16 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
                 startChunk?: number;
                 nextChunk?: number | null;
                 segments?: Array<{ text?: unknown }>;
+                tokenUsage?: unknown;
               };
+              const usage = normalizeGeminiTokenUsage(parsed.tokenUsage);
+              if (usage) {
+                costTracker.recordTotals({
+                  geminiInputTokens: usage.inputTokens,
+                  geminiOutputTokens: usage.outputTokens
+                });
+                pushCost();
+              }
               if (typeof parsed.totalChunks === "number" && parsed.totalChunks > 0) {
                 transcribeTotal = Math.max(transcribeTotal ?? 0, parsed.totalChunks);
               }

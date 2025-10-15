@@ -63,6 +63,7 @@ import { PROJECT_ROOT } from "./utils/paths.js";
 import { runPipeline } from "./pipeline/runPipeline.js";
 import type { PipelineHandlers } from "./pipeline/runPipeline.js";
 import type { RunStatus } from "./server/runStore.js";
+import { normalizeGeminiTokenUsage } from "./utils/geminiUsage.js";
 
 // Ensure long-running MCP tool calls (Gemini transcription, Claude drafting) have ample time.
 // The Anthropic SDK reads this value when handling MCP requests.
@@ -124,45 +125,12 @@ function extractGeminiTokenUsage(content: unknown): {
   }
 
   try {
-    const parsed = JSON.parse(rawText);
-    const usage = parsed?.tokenUsage;
-    if (!usage || typeof usage !== "object") {
+    const parsed = JSON.parse(rawText) as { tokenUsage?: unknown } | null;
+    if (!parsed || typeof parsed !== "object") {
       return null;
     }
 
-    const toNumber = (value: unknown): number | null => {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-      }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsedValue = Number(value);
-        return Number.isFinite(parsedValue) ? parsedValue : null;
-      }
-      return null;
-    };
-
-    const input =
-      toNumber((usage as Record<string, unknown>).inputTokens) ??
-      toNumber((usage as Record<string, unknown>).promptTokenCount) ??
-      toNumber((usage as Record<string, unknown>).promptTokens);
-
-    const output =
-      toNumber((usage as Record<string, unknown>).outputTokens) ??
-      toNumber((usage as Record<string, unknown>).candidatesTokenCount) ??
-      toNumber((usage as Record<string, unknown>).candidatesTokens);
-
-    const total =
-      toNumber((usage as Record<string, unknown>).totalTokens) ??
-      toNumber((usage as Record<string, unknown>).totalTokenCount);
-
-    if (input === null && output === null && total === null) {
-      return null;
-    }
-
-    const inputTokens = input ?? 0;
-    const outputTokens = output ?? 0;
-    const totalTokens = total ?? inputTokens + outputTokens;
-    return { inputTokens, outputTokens, totalTokens };
+    return normalizeGeminiTokenUsage(parsed.tokenUsage) ?? null;
   } catch {
     return null;
   }
