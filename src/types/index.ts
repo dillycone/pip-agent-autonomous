@@ -95,10 +95,14 @@ export interface CostBreakdown {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  inputCost: string;
-  outputCost: string;
-  cacheCreationCost: string;
-  cacheReadCost: string;
+  geminiInputTokens: number;
+  geminiOutputTokens: number;
+  inputCostUSD: number;
+  outputCostUSD: number;
+  cacheCreationCostUSD: number;
+  cacheReadCostUSD: number;
+  geminiInputCostUSD: number;
+  geminiOutputCostUSD: number;
 }
 
 /**

@@ -2,7 +2,9 @@
  * Safe JSON stringification utilities that handle circular references and redact sensitive data.
  */
 
-const SENSITIVE_KEYS = [
+import { SENSITIVE_FIELD_PATTERNS } from "./sanitize.js";
+
+const SENSITIVE_KEYS = new Set([
   "password",
   "apiKey",
   "api_key",
@@ -18,8 +20,11 @@ const SENSITIVE_KEYS = [
   "refreshToken",
   "refresh_token",
   "privateKey",
-  "private_key"
-];
+  "private_key",
+  "client_secret",
+  "id_token",
+  "bearertoken"
+].map(key => key.toLowerCase()));
 
 const REDACTED = "[REDACTED]";
 const CIRCULAR = "[Circular Reference]";
@@ -38,7 +43,7 @@ export function safeStringify(obj: unknown, maxLength: number = 10000): string {
       obj,
       (key, value) => {
         // Redact sensitive fields
-        if (SENSITIVE_KEYS.includes(key.toLowerCase())) {
+        if (isSensitiveKey(key)) {
           return REDACTED;
         }
 
@@ -155,7 +160,7 @@ function sanitizeObject(obj: unknown, maxDepth: number = 2): unknown {
       break;
     }
 
-    if (SENSITIVE_KEYS.includes(key.toLowerCase())) {
+    if (isSensitiveKey(key)) {
       sanitized[key] = REDACTED;
     } else {
       sanitized[key] = sanitizeObject((obj as any)[key], maxDepth - 1);
@@ -165,4 +170,12 @@ function sanitizeObject(obj: unknown, maxDepth: number = 2): unknown {
   }
 
   return sanitized;
+}
+
+function isSensitiveKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (SENSITIVE_KEYS.has(lower)) {
+    return true;
+  }
+  return SENSITIVE_FIELD_PATTERNS.some(pattern => pattern.test(key));
 }

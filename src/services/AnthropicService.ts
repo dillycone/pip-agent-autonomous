@@ -15,11 +15,13 @@
  *   systemPrompt: "You are an HR specialist",
  *   userPrompt: "Draft a PIP..."
  * });
+ * console.log(response.text, response.usage);
  * ```
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { TextBlock } from "@anthropic-ai/sdk/resources/messages";
+import type { UsageMetrics } from "../types/index.js";
 
 /**
  * Parameters for message generation
@@ -43,7 +45,7 @@ export interface MessageParams {
  * This interface allows for easy mocking in tests:
  * ```typescript
  * const mockService: IAnthropicService = {
- *   generateMessage: async () => "mock response"
+ *   generateMessage: async () => ({ text: "mock response" })
  * };
  * ```
  */
@@ -52,10 +54,12 @@ export interface IAnthropicService {
    * Generate a text message using Claude
    *
    * @param params - Message generation parameters
-   * @returns The generated text content
+   * @returns The generated text content and usage metrics (if provided by API)
    * @throws Error if the API call fails or returns empty content
    */
-  generateMessage(params: MessageParams): Promise<string>;
+  generateMessage(
+    params: MessageParams
+  ): Promise<{ text: string; usage?: UsageMetrics }>;
 }
 
 /**
@@ -80,10 +84,10 @@ export class AnthropicService implements IAnthropicService {
    * Generate a text message using Claude
    *
    * @param params - Message generation parameters
-   * @returns The generated text content (all text blocks joined)
+   * @returns The generated text content (all text blocks joined) and usage metrics
    * @throws Error if the API call fails or returns empty content
    */
-  async generateMessage(params: MessageParams): Promise<string> {
+  async generateMessage(params: MessageParams): Promise<{ text: string; usage?: UsageMetrics }> {
     const response = await this.client.messages.create({
       model: params.model,
       max_tokens: params.maxTokens,
@@ -104,7 +108,7 @@ export class AnthropicService implements IAnthropicService {
       .join("")
       .trim();
 
-    return text;
+    return { text, usage: response.usage as UsageMetrics | undefined };
   }
 }
 
@@ -120,7 +124,7 @@ export class AnthropicService implements IAnthropicService {
  * @example
  * ```typescript
  * const service = createAnthropicService(process.env.ANTHROPIC_API_KEY!);
- * const draft = await service.generateMessage({...});
+ * const { text: draft, usage } = await service.generateMessage({...});
  * ```
  */
 export function createAnthropicService(apiKey: string): IAnthropicService {

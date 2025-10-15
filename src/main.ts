@@ -36,13 +36,7 @@
  */
 
 import "dotenv/config";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { geminiTranscriber } from "./mcp/geminiTranscriber.js";
-import { docxExporter } from "./mcp/docxExporter.js";
-import { pipGenerator } from "./mcp/pipGenerator.js";
-import { makePolicyJudgeAgent } from "./agents/policyJudge.js";
-import { sanitizeError, sanitizeForLogging } from "./utils/sanitize.js";
+import { sanitizeForLogging } from "./utils/sanitize.js";
 import { safeStringify } from "./utils/safe-stringify.js";
 import { logger } from "./utils/logger.js";
 import { handleError } from "./errors/ErrorHandler.js";
@@ -50,40 +44,25 @@ import { ConfigurationError } from "./errors/index.js";
 import {
   validateFilePath,
   validateOutputPath,
-  PathValidationError,
   type ValidationResult
 } from "./utils/validation.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   MODELS,
-  MAX_REVIEW_ROUNDS,
-  MAX_TURNS,
-  PRICING,
   GUIDELINES_PATH,
   ALLOWED_AUDIO_EXTENSIONS,
   ALLOWED_TEMPLATE_EXTENSIONS,
   ALLOWED_OUTPUT_EXTENSIONS,
+  PIP_PROMPT_PATH,
   validateRequiredConfig,
   parseCliArgs,
   getConfigValue
 } from "./config.js";
-import type {
-  MessageWithUsage,
-  CostBreakdown,
-  CostSummary,
-  PipelineResult,
-  StreamEventData
-} from "./types/index.js";
-import {
-  hasUsage,
-  isPipelineSuccess,
-  isPipelineError,
-  isStreamEvent,
-  isSystemMessage,
-  isToolUseEvent,
-  isToolResultEvent
-} from "./types/index.js";
+import { PROJECT_ROOT } from "./utils/paths.js";
+import { runPipeline } from "./pipeline/runPipeline.js";
+import type { PipelineHandlers } from "./pipeline/runPipeline.js";
+import type { RunStatus } from "./server/runStore.js";
 
 // Ensure long-running MCP tool calls (Gemini transcription, Claude drafting) have ample time.
 // The Anthropic SDK reads this value when handling MCP requests.
@@ -91,95 +70,200 @@ if (!process.env.MCP_REQUEST_TIMEOUT_MS) {
   process.env.MCP_REQUEST_TIMEOUT_MS = String(10 * 60 * 1000); // 10 minutes default for long-running MCP calls
 }
 
-const MCP_SERVERS = {
-  "gemini-transcriber": geminiTranscriber,
-  "pip-generator": pipGenerator,
-  "docx-exporter": docxExporter
-} as const;
+import type { CostSummary } from "./types/index.js";
+function logCostSummary(summary: CostSummary) {
+  const geminiCost =
+    summary.breakdown.geminiInputCostUSD + summary.breakdown.geminiOutputCostUSD;
+  logger.info({
+    totalTokens: summary.totalTokens,
+    inputTokens: summary.breakdown.inputTokens,
+    outputTokens: summary.breakdown.outputTokens,
+    cacheCreationTokens: summary.breakdown.cacheCreationTokens,
+    cacheReadTokens: summary.breakdown.cacheReadTokens,
+    geminiInputTokens: summary.breakdown.geminiInputTokens,
+    geminiOutputTokens: summary.breakdown.geminiOutputTokens,
+    geminiInputCostUSD: summary.breakdown.geminiInputCostUSD,
+    geminiOutputCostUSD: summary.breakdown.geminiOutputCostUSD,
+    estimatedCostUSD: summary.estimatedCostUSD
+  }, "📊 Cost Summary");
+  logger.info(`  Total Tokens: ${summary.totalTokens.toLocaleString()}`);
+  logger.info(`  Input Tokens: ${summary.breakdown.inputTokens.toLocaleString()}`);
+  logger.info(`  Output Tokens: ${summary.breakdown.outputTokens.toLocaleString()}`);
+  logger.info(`  Cache Creation: ${summary.breakdown.cacheCreationTokens.toLocaleString()}`);
+  logger.info(`  Cache Read: ${summary.breakdown.cacheReadTokens.toLocaleString()}`);
+  logger.info(`  Gemini Input Tokens: ${summary.breakdown.geminiInputTokens.toLocaleString()}`);
+  logger.info(`  Gemini Output Tokens: ${summary.breakdown.geminiOutputTokens.toLocaleString()}`);
+  logger.info(`  Gemini Cost: $${geminiCost.toFixed(4)}`);
+  logger.info(`  Estimated Cost: $${summary.estimatedCostUSD.toFixed(4)}`);
+}
 
-const ALLOWED_TOOLS = [
-  "mcp__gemini-transcriber__transcribe_audio",
-  "mcp__pip-generator__draft_pip",
-  "mcp__docx-exporter__render_docx"
-];
+function extractToolText(content: unknown): string | null {
+  if (Array.isArray(content)) {
+    const textPart = content.find(
+      part =>
+        typeof part === "object" &&
+        part !== null &&
+        typeof (part as { text?: unknown }).text === "string"
+    ) as { text?: string } | undefined;
+    return typeof textPart?.text === "string" ? textPart.text : null;
+  }
+  if (typeof content === "string") {
+    return content;
+  }
+  return null;
+}
 
-// --- Cost Tracking Class ---
-class CostTracker {
-  private processedMessageIds = new Set<string>();
-  private totalInputTokens = 0;
-  private totalOutputTokens = 0;
-  private totalCacheCreationTokens = 0;
-  private totalCacheReadTokens = 0;
-
-  processMessage(message: MessageWithUsage) {
-    // Only process each message ID once
-    const messageId = message.id || message.messageId;
-    if (messageId && this.processedMessageIds.has(messageId)) {
-      return;
-    }
-    if (messageId) {
-      this.processedMessageIds.add(messageId);
-    }
-
-    const usage = message.usage;
-    if (usage) {
-      this.totalInputTokens += usage.input_tokens || 0;
-      this.totalOutputTokens += usage.output_tokens || 0;
-      this.totalCacheCreationTokens += usage.cache_creation_input_tokens || 0;
-      this.totalCacheReadTokens += usage.cache_read_input_tokens || 0;
-    }
+function extractGeminiTokenUsage(content: unknown): {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+} | null {
+  const rawText = extractToolText(content);
+  if (!rawText) {
+    return null;
   }
 
-  getCost(): CostSummary {
-    const inputCost = (this.totalInputTokens / 1_000_000) * PRICING.INPUT_PER_MTK;
-    const outputCost = (this.totalOutputTokens / 1_000_000) * PRICING.OUTPUT_PER_MTK;
-    const cacheCreationCost = (this.totalCacheCreationTokens / 1_000_000) * PRICING.CACHE_CREATION_PER_MTK;
-    const cacheReadCost = (this.totalCacheReadTokens / 1_000_000) * PRICING.CACHE_READ_PER_MTK;
+  try {
+    const parsed = JSON.parse(rawText);
+    const usage = parsed?.tokenUsage;
+    if (!usage || typeof usage !== "object") {
+      return null;
+    }
 
-    const totalCost = inputCost + outputCost + cacheCreationCost + cacheReadCost;
-    const totalTokens = this.totalInputTokens + this.totalOutputTokens +
-                       this.totalCacheCreationTokens + this.totalCacheReadTokens;
-
-    return {
-      totalTokens,
-      estimatedCostUSD: totalCost,
-      breakdown: {
-        inputTokens: this.totalInputTokens,
-        outputTokens: this.totalOutputTokens,
-        cacheCreationTokens: this.totalCacheCreationTokens,
-        cacheReadTokens: this.totalCacheReadTokens,
-        inputCost: inputCost.toFixed(4),
-        outputCost: outputCost.toFixed(4),
-        cacheCreationCost: cacheCreationCost.toFixed(4),
-        cacheReadCost: cacheReadCost.toFixed(4)
+    const toNumber = (value: unknown): number | null => {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
       }
+      if (typeof value === "string" && value.trim() !== "") {
+        const parsedValue = Number(value);
+        return Number.isFinite(parsedValue) ? parsedValue : null;
+      }
+      return null;
     };
-  }
 
-  printSummary() {
-    const cost = this.getCost();
-    logger.info({
-      totalTokens: cost.totalTokens,
-      inputTokens: cost.breakdown.inputTokens,
-      outputTokens: cost.breakdown.outputTokens,
-      cacheCreationTokens: cost.breakdown.cacheCreationTokens,
-      cacheReadTokens: cost.breakdown.cacheReadTokens,
-      estimatedCostUSD: cost.estimatedCostUSD
-    }, "📊 Cost Summary");
-    logger.info(`  Total Tokens: ${cost.totalTokens.toLocaleString()}`);
-    logger.info(`  Input Tokens: ${cost.breakdown.inputTokens.toLocaleString()}`);
-    logger.info(`  Output Tokens: ${cost.breakdown.outputTokens.toLocaleString()}`);
-    logger.info(`  Cache Creation: ${cost.breakdown.cacheCreationTokens.toLocaleString()}`);
-    logger.info(`  Cache Read: ${cost.breakdown.cacheReadTokens.toLocaleString()}`);
-    logger.info(`  Estimated Cost: $${cost.estimatedCostUSD.toFixed(4)}`);
+    const input =
+      toNumber((usage as Record<string, unknown>).inputTokens) ??
+      toNumber((usage as Record<string, unknown>).promptTokenCount) ??
+      toNumber((usage as Record<string, unknown>).promptTokens);
+
+    const output =
+      toNumber((usage as Record<string, unknown>).outputTokens) ??
+      toNumber((usage as Record<string, unknown>).candidatesTokenCount) ??
+      toNumber((usage as Record<string, unknown>).candidatesTokens);
+
+    const total =
+      toNumber((usage as Record<string, unknown>).totalTokens) ??
+      toNumber((usage as Record<string, unknown>).totalTokenCount);
+
+    if (input === null && output === null && total === null) {
+      return null;
+    }
+
+    const inputTokens = input ?? 0;
+    const outputTokens = output ?? 0;
+    const totalTokens = total ?? inputTokens + outputTokens;
+    return { inputTokens, outputTokens, totalTokens };
+  } catch {
+    return null;
   }
 }
+
+function extractClaudeToolUsage(content: unknown): {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+} | null {
+  const rawText = extractToolText(content);
+  if (!rawText) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawText) as {
+      usage?: {
+        input_tokens?: unknown;
+        inputTokens?: unknown;
+        output_tokens?: unknown;
+        outputTokens?: unknown;
+        cache_creation_input_tokens?: unknown;
+        cacheCreationInputTokens?: unknown;
+        cache_read_input_tokens?: unknown;
+        cacheReadInputTokens?: unknown;
+      };
+    } | null;
+
+    if (!parsed || typeof parsed !== "object" || !parsed.usage || typeof parsed.usage !== "object") {
+      return null;
+    }
+
+    const toNumber = (value: unknown): number | null => {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === "string" && value.trim() !== "") {
+        const parsedValue = Number(value);
+        return Number.isFinite(parsedValue) ? parsedValue : null;
+      }
+      return null;
+    };
+
+    const usage = parsed.usage;
+    const inputTokens =
+      toNumber(usage.input_tokens) ??
+      toNumber((usage as Record<string, unknown>).inputTokens) ??
+      0;
+    const outputTokens =
+      toNumber(usage.output_tokens) ??
+      toNumber((usage as Record<string, unknown>).outputTokens) ??
+      0;
+    const cacheCreationTokens =
+      toNumber(usage.cache_creation_input_tokens) ??
+      toNumber((usage as Record<string, unknown>).cacheCreationInputTokens) ??
+      0;
+    const cacheReadTokens =
+      toNumber(usage.cache_read_input_tokens) ??
+      toNumber((usage as Record<string, unknown>).cacheReadInputTokens) ??
+      0;
+
+    if (
+      inputTokens === 0 &&
+      outputTokens === 0 &&
+      cacheCreationTokens === 0 &&
+      cacheReadTokens === 0
+    ) {
+      return null;
+    }
+
+    return {
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens,
+      cacheReadTokens
+    };
+  } catch {
+    return null;
+  }
+}
+
+// --- Cost Tracking Class ---
 
 // --- Todo Tracking ---
 interface Todo {
   content: string;
   status: "pending" | "in_progress" | "completed";
   activeForm: string;
+}
+
+type FinalEventPayload = {
+  ok?: boolean;
+  draft?: string;
+  docx?: string;
+  docxRelative?: string;
+};
+
+function isFinalEventPayload(value: unknown): value is FinalEventPayload {
+  return value !== null && typeof value === "object";
 }
 
 class TodoTracker {
@@ -220,7 +304,8 @@ const audioValidation = validateFilePath(audioPath, {
   mustExist: true,
   mustBeFile: true,
   extensions: [...ALLOWED_AUDIO_EXTENSIONS] as string[],
-  allowAbsolute: true
+  allowAbsolute: true,
+  baseDir: PROJECT_ROOT
 });
 
 if (!audioValidation.valid) {
@@ -243,7 +328,8 @@ if (userProvidedTemplate || fs.existsSync(templatePath)) {
     mustExist: true,
     mustBeFile: true,
     extensions: [...ALLOWED_TEMPLATE_EXTENSIONS] as string[],
-    allowAbsolute: true
+    allowAbsolute: true,
+    baseDir: PROJECT_ROOT
   });
 
   if (!result.valid) {
@@ -264,7 +350,9 @@ if (userProvidedTemplate || fs.existsSync(templatePath)) {
 // Validate output path
 const outputValidation = validateOutputPath(outputPath, {
   extensions: [...ALLOWED_OUTPUT_EXTENSIONS] as string[],
-  allowOverwrite: true
+  allowOverwrite: true,
+  allowAbsolute: true,
+  baseDir: PROJECT_ROOT
 });
 
 if (!outputValidation.valid) {
@@ -290,58 +378,6 @@ if (templateValidation.sanitizedPath) {
 }
 logger.debug(pathDebugContext, "✅ All file paths validated successfully");
 
-const guidelinesText = fs.readFileSync(GUIDELINES_PATH, "utf-8");
-const judgeAgent = makePolicyJudgeAgent(guidelinesText, outputLanguage);
-
-function buildPipelinePrompt() {
-  const transcriptionArgs = {
-    audioPath,
-    inputLanguage,
-    outputLanguage,
-    diarize: true,
-    timestamps: true
-  };
-  const transcriptionArgsExample = {
-    ...transcriptionArgs,
-    startChunk: 0
-  };
-  const pipDraftArgs = {
-    transcript: "<REPLACE_WITH_TRANSCRIPT>",
-    outputLanguage
-  };
-  const docxArgs = {
-    templatePath: templateSanitizedPath,
-    outputPath,
-    language: outputLanguage,
-    title: "Performance Improvement Plan",
-    body: "<REPLACE_WITH_APPROVED_DRAFT>"
-  };
-
-  const instructions = [
-    "You are an autonomous pipeline operator. Use the available MCP tools to complete the PIP workflow.",
-    "TOOLS:",
-    "- mcp__gemini-transcriber__transcribe_audio → transcribe audio meeting recordings.",
-    "- mcp__pip-generator__draft_pip → create a draft PIP from a transcript.",
-    "- mcp__docx-exporter__render_docx → produce the final DOCX file.",
-    "STEPS:",
-    `1. Initialize CURRENT_CHUNK=0 and TRANSCRIPTS=[] (strings). Call the transcription tool with the following JSON arguments (include "startChunk": CURRENT_CHUNK):
-${JSON.stringify(transcriptionArgsExample, null, 2)}
-   After each successful call (response.ok === true), append any non-empty response.transcript to TRANSCRIPTS and merge response.segments into an aggregate SEGMENTS list. If response.nextChunk is a number, set CURRENT_CHUNK to that value and call the tool again with startChunk=CURRENT_CHUNK. Repeat until nextChunk is null or undefined. If any call returns ok !== true, immediately respond with {"status":"error","message":<tool-error>}. Once finished, join TRANSCRIPTS with two newlines, trim whitespace, and set TRANSCRIPT to that string (ensure it is non-empty).`,
-    `2. Call the PIP generator tool with JSON arguments matching:\n${JSON.stringify(pipDraftArgs, null, 2)}\n   Replace the placeholder value with TRANSCRIPT. Expect JSON { ok: true, draft }. On failure, return {\"status\":\"error\",\"message\":<tool-error>}. Set CURRENT_DRAFT to draft.trim().`,
-    `3. Send CURRENT_DRAFT to the subagent "policy-judge" for review. If the verdict approved=false, apply required_changes (and revised_draft if provided) to produce a new CURRENT_DRAFT. Repeat the judge loop until approved=true or you reach ${MAX_REVIEW_ROUNDS} review rounds. Do not call pip-generator again during revisions. If you cannot secure approval, return {\"status\":\"error\",\"message\":\"Unable to obtain approval\"}.`,
-    `4. When approved=true, set APPROVED_DRAFT to the final CURRENT_DRAFT.`,
-    `5. Call the docx exporter tool with arguments:\n${JSON.stringify(docxArgs, null, 2)}\n   Replace the body placeholder with APPROVED_DRAFT. If the tool response JSON has ok !== true, return {\"status\":\"error\",\"message\":<tool-error>}.`,
-    `6. After successful DOCX export, respond with JSON {\"status\":\"ok\",\"draft\":APPROVED_DRAFT,\"docx\":\"${outputPath}\"}. Do NOT include markdown fences or extra commentary.`,
-    "If any unexpected failure occurs, respond with {\"status\":\"error\",\"message\":<description>}."
-  ].join("\n\n");
-
-  return instructions;
-}
-
-// --- Build prompt (string format for compatibility) ---
-// Note: While streaming input with async generators is ideal,
-// we use string format here for TypeScript type compatibility with SDK 0.1.14
-
 async function run() {
   // Validate required configuration
   const validation = validateRequiredConfig();
@@ -359,141 +395,209 @@ async function run() {
   logger.info(`   Audio: ${audioPath}`);
   logger.info(`   Output: ${outputPath}`);
 
-  const costTracker = new CostTracker();
   const todoTracker = new TodoTracker();
   let sessionId: string | undefined;
+  let latestCostSummary: CostSummary | null = null;
+  let finalEvent: FinalEventPayload | null = null;
+  let runStatus: RunStatus | null = null;
+  let runError: unknown;
 
-  const q = query({
-    prompt: buildPipelinePrompt(),
-    options: {
-      model: MODELS.CLAUDE_SONNET,
-      agents: { "policy-judge": judgeAgent },
-      mcpServers: MCP_SERVERS,
-      allowedTools: ALLOWED_TOOLS,
-      permissionMode: "bypassPermissions",
-      maxTurns: MAX_TURNS
+  const handlers: PipelineHandlers = {
+    emit(event, data) {
+      switch (event) {
+        case "status": {
+          const payload = data as { step?: string; status?: string; meta?: Record<string, unknown> };
+          if (payload?.step && payload?.status) {
+            logger.info({ step: payload.step, status: payload.status, meta: payload.meta }, `📍 ${payload.step} → ${payload.status}`);
+          }
+          break;
+        }
+        case "tool_use": {
+          const payload = data as { name?: string; inputSummary?: unknown };
+          if (payload?.name) {
+            logger.debug({ toolName: payload.name, toolInput: payload.inputSummary }, `🔧 Tool: ${payload.name}`);
+          }
+          break;
+        }
+        case "tool_result": {
+          const payload = data as {
+            name?: string;
+            isError?: boolean;
+            content?: unknown;
+          };
+          if (!payload) break;
+          if (payload.isError) {
+            const sanitizedContent = sanitizeForLogging(payload.content);
+            logger.warn({ toolName: payload.name, error: sanitizedContent }, `  ⚠️  Tool ${payload.name ?? "unknown"} returned error`);
+            logger.warn(`     ${safeStringify(sanitizedContent, 200)}`);
+            const rawText = Array.isArray(payload.content)
+              ? payload.content.find((part: any) => typeof part?.text === "string")?.text
+              : typeof payload.content === "string"
+                ? payload.content
+                : null;
+            if (typeof rawText === "string") {
+              try {
+                const parsed = JSON.parse(rawText);
+                const hint = typeof parsed?.hint === "string"
+                  ? parsed.hint
+                  : typeof parsed?.details?.hint === "string"
+                    ? parsed.details.hint
+                    : undefined;
+                if (hint) {
+                  logger.warn(`     Hint: ${hint}`);
+                }
+              } catch {
+                // ignore
+              }
+            }
+          } else if (payload.name === "mcp__gemini-transcriber__transcribe_audio") {
+            const usage = extractGeminiTokenUsage(payload.content);
+            if (usage) {
+              logger.info({
+                toolName: payload.name,
+                geminiInputTokens: usage.inputTokens,
+                geminiOutputTokens: usage.outputTokens,
+                geminiTotalTokens: usage.totalTokens
+              }, "🎧 Recorded Gemini transcription usage");
+            }
+          } else if (payload.name === "mcp__pip-generator__draft_pip") {
+            const usage = extractClaudeToolUsage(payload.content);
+            if (usage) {
+              logger.info({
+                toolName: payload.name,
+                claudeInputTokens: usage.inputTokens,
+                claudeOutputTokens: usage.outputTokens,
+                claudeCacheCreationTokens: usage.cacheCreationTokens,
+                claudeCacheReadTokens: usage.cacheReadTokens
+              }, "🧮 Recorded Claude drafting usage");
+            }
+          }
+          break;
+        }
+        case "todo": {
+          const payload = data as { todos?: Todo[] };
+          if (Array.isArray(payload?.todos)) {
+            todoTracker.update(payload.todos as Todo[]);
+          }
+          break;
+        }
+        case "log": {
+          const payload = data as { level?: string; message?: string };
+          const level = payload?.level ?? "info";
+          const message = payload?.message ?? "";
+          if (level === "debug") {
+            logger.debug(message);
+          } else if (level === "warn") {
+            logger.warn(message);
+          } else if (level === "error") {
+            logger.error(message);
+          } else {
+            logger.info(message);
+          }
+          if (message.startsWith("Session ")) {
+            sessionId = message.replace("Session ", "").trim();
+          }
+          break;
+        }
+        case "judge_round": {
+          const payload = data as { approved?: boolean; round?: number; reasons?: string[]; required_changes?: string[] };
+          logger.info({
+            round: payload?.round,
+            approved: payload?.approved,
+            reasons: payload?.reasons,
+            requiredChanges: payload?.required_changes
+          }, `⚖️  Judge round ${payload?.round ?? "?"}: ${payload?.approved ? "approved" : "changes required"}`);
+          break;
+        }
+        case "cost": {
+          const payload = data as { summary?: CostSummary };
+          if (payload?.summary) {
+            latestCostSummary = payload.summary;
+          }
+          break;
+        }
+        case "transcript_chunk": {
+          const payload = data as { processedChunks?: number; totalChunks?: number };
+          if (payload?.totalChunks) {
+            logger.info({ processed: payload.processedChunks, total: payload.totalChunks }, "📝 Transcript progress");
+          }
+          break;
+        }
+        case "final": {
+          finalEvent = data as FinalEventPayload;
+          break;
+        }
+        case "error": {
+          const payload = data as { message?: string; details?: unknown };
+          logger.error({ details: sanitizeForLogging(payload?.details) }, payload?.message ?? "Pipeline error");
+          break;
+        }
+        default:
+          logger.debug({ event, data }, "Unhandled pipeline event");
+      }
+    },
+    setRunStatus(status, error) {
+      runStatus = status;
+      if (status === "error" && error) {
+        runError = error;
+      }
+    },
+    finish(status, error) {
+      runStatus = status;
+      if (error) {
+        runError = error;
+      }
     }
+  };
+
+  await runPipeline({
+    audioPath: audioValidation.sanitizedPath!,
+    templatePath: templateSanitizedPath,
+    outputPath: outputValidation.sanitizedPath!,
+    promptPath: PIP_PROMPT_PATH,
+    guidelinesPath: GUIDELINES_PATH,
+    inputLanguage,
+    outputLanguage,
+    projectRoot: PROJECT_ROOT,
+    handlers
   });
 
-  let finalJson: string | null = null;
-
-  for await (const m of q) {
-    // Process all messages for cost tracking
-    if (hasUsage(m)) {
-      costTracker.processMessage(m);
-    }
-
-    // Capture session ID for potential resumption (in system messages)
-    if (isSystemMessage(m) && "sessionId" in m) {
-      sessionId = (m as SDKMessage & { sessionId?: string }).sessionId;
-      logger.info({ sessionId }, `📝 Session ID: ${sessionId}`);
-    }
-
-    // Track todos from stream events
-    if (isStreamEvent(m)) {
-      const eventData = m.event as unknown as StreamEventData;
-      const eventType = eventData?.type;
-
-      // Handle tool use events
-      if (isToolUseEvent(eventData)) {
-        logger.debug({ toolName: eventData.name, toolInput: eventData.input }, `🔧 Tool: ${eventData.name}`);
-
-        // Track TodoWrite specifically
-        if (eventData.name === "TodoWrite" && typeof eventData.input === "object" && eventData.input !== null) {
-          const todos = (eventData.input as { todos?: unknown }).todos;
-          if (Array.isArray(todos)) {
-            todoTracker.update(todos);
-          }
-        }
-      }
-
-      // Handle tool result errors
-      if (isToolResultEvent(eventData) && eventData.isError) {
-        const sanitizedContent = sanitizeForLogging(eventData.content);
-        logger.warn({ toolName: eventData.name, error: sanitizedContent }, `  ⚠️  Tool ${eventData.name} returned error`);
-        logger.warn(`     ${safeStringify(sanitizedContent, 200)}`);
-        const rawText = Array.isArray(eventData.content)
-          ? eventData.content.find(part => typeof part?.text === "string")?.text
-          : typeof eventData.content === "string"
-            ? eventData.content
-            : null;
-        if (typeof rawText === "string") {
-          try {
-            const parsed = JSON.parse(rawText);
-            const hint = typeof parsed?.hint === "string"
-              ? parsed.hint
-              : typeof parsed?.details?.hint === "string"
-                ? parsed.details.hint
-                : undefined;
-            if (hint) {
-              logger.warn(`     Hint: ${hint}`);
-            }
-          } catch {
-            // Ignore JSON parse failures; already logged sanitized payload
-          }
-        }
-      }
-    }
-
-    // Log assistant messages
-    if (m.type === "assistant") {
-      const assistantMsg = m as SDKMessage & { text?: string };
-      const text = assistantMsg.text;
-      if (text) {
-        // Only log non-JSON responses (final JSON is handled separately)
-        if (!text.trim().startsWith("{")) {
-          logger.debug(`💭 ${text}`);
-        }
-      }
-    }
-
-    // Handle final result
-    if (m.type === "result") {
-      if (m.subtype === "success") {
-        finalJson = m.result;
-      } else {
-        logger.error({ error: sanitizeForLogging(m) }, "❌ Run error");
-        logger.error(safeStringify(sanitizeForLogging(m)));
-        costTracker.printSummary();
-        process.exit(1);
-      }
-    }
+  if (latestCostSummary) {
+    logCostSummary(latestCostSummary);
+  } else {
+    logger.warn("⚠️  Cost summary unavailable (no usage events reported).");
   }
 
-  // Print cost summary
-  costTracker.printSummary();
-
-  if (!finalJson) {
-    logger.error("❌ Agent did not return a result.");
+  const finalData: FinalEventPayload | null = isFinalEventPayload(finalEvent) ? finalEvent : null;
+  if (runStatus !== "success" || !finalData) {
+    if (runError) {
+      logger.error({ error: sanitizeForLogging(runError) }, "❌ Pipeline failed");
+    } else {
+      logger.error("❌ Pipeline failed without producing a final result.");
+    }
     process.exit(1);
   }
 
-  let parsed: unknown = finalJson;
-  if (typeof finalJson === "string") {
-    try {
-      parsed = JSON.parse(finalJson);
-    } catch {
-      logger.error({ result: sanitizeForLogging(finalJson) }, "❌ Agent returned non-JSON result");
-      logger.error(safeStringify(sanitizeForLogging(finalJson)));
-      process.exit(1);
-    }
-  }
-
-  // Validate the parsed result with proper type guards
-  if (!isPipelineSuccess(parsed)) {
-    logger.error({ parsed: sanitizeForLogging(parsed) }, "❌ Agent reported failure");
-    logger.error(safeStringify(sanitizeForLogging(parsed)));
+  if ((finalData as FinalEventPayload).ok === false) {
+    logger.error("❌ Pipeline reported failure in final payload.");
     process.exit(1);
   }
 
-  const draftBody = parsed.draft.trim();
+  const finalPayload = finalData as FinalEventPayload;
+  const draftBody = (finalPayload.draft ?? "").trim();
   logger.info({ draftLength: draftBody.length }, "✅ Pipeline completed successfully!");
   logger.info(`   Draft length: ${draftBody.length} characters`);
 
-  if (!fs.existsSync(outputPath)) {
-    logger.warn({ outputPath }, "⚠️  Warning: expected output docx not found at", outputPath);
+  const resolvedDocx = finalPayload.docxRelative
+    ? path.resolve(finalPayload.docxRelative)
+    : finalPayload.docx
+      ? path.resolve(finalPayload.docx)
+      : path.resolve(outputValidation.sanitizedPath!);
+
+  if (!fs.existsSync(resolvedDocx)) {
+    logger.warn({ outputPath: resolvedDocx }, `⚠️  Warning: expected output docx not found at ${resolvedDocx}`);
   } else {
-    logger.info({ outputPath: path.resolve(outputPath) }, `   DOCX written to: ${path.resolve(outputPath)}`);
+    logger.info({ outputPath: resolvedDocx }, `   DOCX written to: ${resolvedDocx}`);
   }
 
   // Save session ID for potential resumption

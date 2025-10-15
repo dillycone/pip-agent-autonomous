@@ -1,6 +1,5 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import mime from "mime";
@@ -12,11 +11,11 @@ import { AudioValidationError, TranscriptionError, ConfigurationError } from "..
 import { createChildLogger } from "../utils/logger.js";
 import { safeSpawn } from "../utils/shell-safe.js";
 import { validateFilePath } from "../utils/validation.js";
+import { PROJECT_ROOT } from "../utils/paths.js";
 import {
   GEMINI_API_KEY,
   MODELS,
   GEMINI_CHUNK_SECONDS,
-  GEMINI_SINGLE_PASS_MAX,
   GEMINI_TRANSCRIBE_CONCURRENCY,
   GEMINI_TRANSCRIBE_RETRIES,
   ALLOWED_AUDIO_EXTENSIONS,
@@ -77,9 +76,28 @@ function getS3Service(): IS3Service {
   return s3Service;
 }
 
+const GeminiSegmentSchema = z.object({
+  start: z.union([z.string(), z.number()]).optional(),
+  end: z.union([z.string(), z.number()]).optional(),
+  begin: z.union([z.string(), z.number()]).optional(),
+  finish: z.union([z.string(), z.number()]).optional(),
+  from: z.union([z.string(), z.number()]).optional(),
+  to: z.union([z.string(), z.number()]).optional(),
+  text: z.string().optional(),
+  transcript: z.string().optional(),
+  speaker: z.string().optional()
+});
+
+const GeminiTranscriptionSchema = z.object({
+  transcript: z.string().optional(),
+  segments: z.array(GeminiSegmentSchema).optional()
+});
+
 const MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024;
-const MIN_CHUNK_SECONDS = 10;
-const MAX_CHUNKS_PER_CALL = 1; // Process one chunk at a time to prevent worker crashes
+// Limit concurrency in development to reduce worker churn; otherwise honor configured concurrency.
+const MAX_CHUNKS_PER_CALL = process.env.NODE_ENV === "development"
+  ? 1
+  : Math.max(1, GEMINI_TRANSCRIBE_CONCURRENCY);
 
 /**
  * Format bytes to human-readable size (e.g., "200MB")
@@ -102,8 +120,91 @@ type NormalizedSegment = {
   text: string;
 };
 
+type TranscribeChunkResult = {
+  transcript: string;
+  segments: NormalizedSegment[];
+  usage: GeminiTokenUsage | null;
+};
+
 function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+interface GeminiTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+function extractTokenUsageFromMetadata(metadata?: Record<string, unknown> | null): GeminiTokenUsage | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+
+  const toNumber = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
+  const raw = metadata as Record<string, unknown>;
+
+  const input =
+    toNumber(raw.promptTokenCount) ??
+    toNumber(raw.prompt_token_count) ??
+    toNumber(raw.inputTokenCount) ??
+    toNumber(raw.input_token_count) ??
+    toNumber(raw.promptTokens) ??
+    toNumber(raw.inputTokens);
+
+  const output =
+    toNumber(raw.candidatesTokenCount) ??
+    toNumber(raw.candidates_token_count) ??
+    toNumber(raw.outputTokenCount) ??
+    toNumber(raw.output_token_count) ??
+    toNumber(raw.candidatesTokens) ??
+    toNumber(raw.outputTokens);
+
+  const total =
+    toNumber(raw.totalTokenCount) ??
+    toNumber(raw.total_token_count) ??
+    toNumber(raw.totalTokens);
+
+  if (input === null && output === null && total === null) {
+    return null;
+  }
+
+  const inputTokens = input ?? 0;
+  const outputTokens = output ?? 0;
+  const totalTokens = total ?? inputTokens + outputTokens;
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens
+  };
+}
+
+function addTokenUsageTotals(
+  current: GeminiTokenUsage | null,
+  addition: GeminiTokenUsage | null
+): GeminiTokenUsage | null {
+  if (!addition) {
+    return current;
+  }
+  if (!current) {
+    return { ...addition };
+  }
+  return {
+    inputTokens: current.inputTokens + addition.inputTokens,
+    outputTokens: current.outputTokens + addition.outputTokens,
+    totalTokens: current.totalTokens + addition.totalTokens
+  };
 }
 
 function hasTimeoutSignal(value: unknown, seen: WeakSet<object> = new WeakSet()): boolean {
@@ -171,6 +272,43 @@ function isTimeoutLikeError(error: unknown): boolean {
   }
 
   return hasTimeoutSignal(error);
+}
+
+/**
+ * Detects if an error indicates the file is too large for Gemini to process
+ * Used to determine when to fall back to chunked transcription
+ */
+function isFileTooLargeError(error: unknown): boolean {
+  if (error === null || error === undefined) {
+    return false;
+  }
+
+  // Check error message for size-related keywords
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    if (
+      message.includes("too large") ||
+      message.includes("file size") ||
+      message.includes("exceeds maximum") ||
+      message.includes("request entity too large") ||
+      message.includes("payload too large")
+    ) {
+      return true;
+    }
+  }
+
+  // Check HTTP status codes
+  if (typeof error === "object") {
+    const obj = error as Record<string, unknown>;
+    const status = obj.status || obj.statusCode || obj.code;
+
+    // HTTP 413 Payload Too Large
+    if (status === 413 || status === "413") {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function runWithConcurrency<T>(
@@ -390,30 +528,65 @@ async function probeDuration(filePath: string): Promise<number | null> {
 async function splitAudio(filePath: string, chunkSeconds: number): Promise<{ tmpDir: string; chunks: ChunkInfo[] }> {
   const tmpDir = await fsService.mkdtemp(path.join(os.tmpdir(), "gemini-chunks-"));
   const ext = path.extname(filePath) || ".mp3";
-  const pattern = path.join(tmpDir, `chunk_%03d${ext}`);
+  let chunkExtension = ext;
+  let pattern = path.join(tmpDir, `chunk_%03d${chunkExtension}`);
 
   // Log chunk configuration before splitting
   const duration = await probeDuration(filePath);
   const estimatedChunks = duration ? Math.ceil(duration / chunkSeconds) : "unknown";
   safeLog('info', { estimatedChunks, chunkSeconds, duration }, `🎵 Splitting audio into ~${estimatedChunks} chunks (${chunkSeconds} seconds each)...`);
 
-  await runCommand("ffmpeg", [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-i",
-    filePath,
-    "-f",
-    "segment",
-    "-segment_time",
-    String(chunkSeconds),
-    "-c",
-    "copy",
-    pattern
-  ]);
+  try {
+    await runCommand("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      filePath,
+      "-f",
+      "segment",
+      "-segment_time",
+      String(chunkSeconds),
+      "-c",
+      "copy",
+      pattern
+    ]);
+  } catch (error) {
+    const sanitized = sanitizeError(error);
+    safeLog('warn', { error: sanitized }, "⚠️  Copy-based chunking failed, falling back to PCM re-encode");
+    const existing = await fsService.readdir(tmpDir);
+    await Promise.all(
+      existing
+        .filter(name => name.startsWith("chunk_"))
+        .map(name => fsService.rm(path.join(tmpDir, name), { force: true }))
+    );
+
+    chunkExtension = ".wav";
+    pattern = path.join(tmpDir, `chunk_%03d${chunkExtension}`);
+
+    await runCommand("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      filePath,
+      "-f",
+      "segment",
+      "-segment_time",
+      String(chunkSeconds),
+      "-c:a",
+      "pcm_s16le",
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      pattern
+    ]);
+  }
+
   const entries = await fsService.readdir(tmpDir);
   const chunks = entries
-    .filter(name => name.startsWith("chunk_"))
+    .filter(name => name.startsWith("chunk_") && name.endsWith(chunkExtension))
     .sort()
     .map((name, index) => ({
       path: path.join(tmpDir, name),
@@ -478,7 +651,7 @@ async function transcribeChunk(params: {
   gemini: IGeminiService;
   modelId: string;
   instructionsBase: string[];
-}) {
+}): Promise<TranscribeChunkResult> {
   const { filePath, offsetSeconds, gemini, modelId, instructionsBase } = params;
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= GEMINI_TRANSCRIBE_RETRIES; attempt++) {
@@ -516,6 +689,8 @@ async function transcribeChunk(params: {
       const text: string = result.text ?? result.response?.text?.() ?? "";
       const cleaned = String(text).replace(/```json|```/g, "").trim();
 
+      const usage = extractTokenUsageFromMetadata(result.usageMetadata);
+
       let parsed: unknown;
       try {
         parsed = JSON.parse(cleaned);
@@ -524,12 +699,22 @@ async function transcribeChunk(params: {
       }
 
       // Validate and extract transcription data
-      const transcriptionData = parsed as GeminiTranscriptionResult;
-      const rawSegments: GeminiRawSegment[] = Array.isArray(transcriptionData?.segments)
-        ? transcriptionData.segments
-        : Array.isArray(parsed)
-          ? parsed as GeminiRawSegment[]
-          : [];
+      let transcriptionData: GeminiTranscriptionResult | null = null;
+      let rawSegments: GeminiRawSegment[] = [];
+      const schemaResult = GeminiTranscriptionSchema.safeParse(parsed);
+      if (schemaResult.success) {
+        transcriptionData = schemaResult.data as GeminiTranscriptionResult;
+        rawSegments = Array.isArray(schemaResult.data.segments) ? schemaResult.data.segments : [];
+      } else if (Array.isArray(parsed)) {
+        rawSegments = parsed as GeminiRawSegment[];
+      } else {
+        const validationError = schemaResult.error.flatten();
+        throw new TranscriptionError("Gemini response validation failed", {
+          issues: validationError,
+          chunkOffsetSeconds: offsetSeconds,
+          rawResponse: parsed
+        });
+      }
 
       const transcript: string =
         typeof transcriptionData?.transcript === "string" && transcriptionData.transcript.trim()
@@ -540,9 +725,19 @@ async function transcribeChunk(params: {
               .join("\n")
               .trim();
 
-      const segments = normalizeSegments(rawSegments, offsetSeconds);
+      let segments = normalizeSegments(rawSegments, offsetSeconds);
+      if (segments.length === 0 && transcript) {
+        segments = [{
+          start: formatTimestamp(offsetSeconds),
+          end: null,
+          startSeconds: offsetSeconds,
+          endSeconds: null,
+          speaker: "SPEAKER_1",
+          text: transcript
+        }];
+      }
 
-      return { transcript, segments };
+      return { transcript, segments, usage };
     } catch (err) {
       lastError = err;
       if (attempt < GEMINI_TRANSCRIBE_RETRIES) {
@@ -580,7 +775,8 @@ function buildSuccess(
     totalChunks?: number;
     processedChunks?: number;
     startChunk?: number;
-  }
+  },
+  usage?: GeminiTokenUsage | null
 ) {
   const printableSegments = segments
     .filter(seg => seg.text)
@@ -594,6 +790,13 @@ function buildSuccess(
     transcript: transcript.trim(),
     segments: printableSegments
   };
+  if (usage) {
+    payload.tokenUsage = {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens
+    };
+  }
   if (nextChunk !== null && Number.isFinite(nextChunk)) {
     payload.nextChunk = nextChunk;
   }
@@ -612,6 +815,26 @@ function buildSuccess(
 // We use the new Google Gen AI SDK (@google/genai).
 // Ensure GEMINI_API_KEY is set in your environment.
 
+/**
+ * Transcription Strategy:
+ *
+ * 1. ALWAYS attempt single-pass transcription first, regardless of duration
+ *    - Gemini 2.5 Pro supports up to 9.5 hours of audio
+ *    - Single-pass is faster and simpler than chunking
+ *
+ * 2. Automatic fallback to chunking ONLY if:
+ *    - Gemini times out during transcription
+ *    - Gemini rejects file as too large
+ *
+ * 3. Chunking strategy when needed:
+ *    - Split into GEMINI_CHUNK_SECONDS segments (default 30s)
+ *    - Parallel transcription with GEMINI_TRANSCRIBE_CONCURRENCY workers
+ *    - Automatic timestamp alignment and segment merging
+ *    - Per-chunk retry logic with exponential backoff
+ *
+ * This optimizes for the common case (single-pass success) while maintaining
+ * reliability through automatic chunking fallback for exceptional cases.
+ */
 export const geminiTranscriber = createSdkMcpServer({
   name: "gemini-transcriber",
   version: "0.1.0",
@@ -638,7 +861,8 @@ export const geminiTranscriber = createSdkMcpServer({
             mustExist: true,
             mustBeFile: true,
             extensions: [...ALLOWED_AUDIO_EXTENSIONS] as string[],
-            allowAbsolute: true // Allow absolute paths in MCP context
+            allowAbsolute: true, // Allow absolute paths in MCP context
+            baseDir: PROJECT_ROOT
           });
 
           if (!pathValidation.valid) {
@@ -692,7 +916,6 @@ export const geminiTranscriber = createSdkMcpServer({
 
           const duration = await probeDuration(validatedAudioPath);
           const chunkSeconds = GEMINI_CHUNK_SECONDS;
-          const shouldChunkDefault = duration === null ? true : duration > GEMINI_SINGLE_PASS_MAX;
 
           const preferPresigned = GEMINI_INPUT_MODE === "presigned";
 
@@ -707,12 +930,17 @@ export const geminiTranscriber = createSdkMcpServer({
           }
 
           const runSingleViaS3AndUpload = async () => {
-            // For audit: store on S3, then upload the local file to Gemini File API
-            safeLog('info', { mode: 's3+upload' }, "🎤 Transcribing audio: store in S3, then Gemini upload (single pass)...");
+            // For audit/compliance: store on S3, then upload the local file to Gemini File API
+            safeLog(
+              'info',
+              { mode: 's3+upload', note: 'Audit copy stored in S3; Gemini still receives SDK file upload' },
+              "🎤 Transcribing audio: storing audit copy in S3 before Gemini SDK upload (single pass)..."
+            );
             const s3 = getS3Service();
             const mimeType = mime.getType(validatedAudioPath) || "audio/wav";
             let uploadedKey: string | null = null;
             let uploadedBucket: string | null = null;
+
             try {
               const uploaded = await s3.uploadAndPresign({
                 filePath: validatedAudioPath,
@@ -728,26 +956,35 @@ export const geminiTranscriber = createSdkMcpServer({
               safeLog('warn', { error: se }, "S3 upload/presign failed; continuing with direct Gemini upload");
             }
 
-            const res = await transcribeChunk({
-              filePath: validatedAudioPath,
-              offsetSeconds: 0,
-              gemini,
-              modelId,
-              instructionsBase
-            });
+            try {
+              const res = await transcribeChunk({
+                filePath: validatedAudioPath,
+                offsetSeconds: 0,
+                gemini,
+                modelId,
+                instructionsBase
+              });
 
-            if (uploadedBucket && uploadedKey && S3_DELETE_AFTER) {
-              try {
-                await s3.deleteObject(uploadedBucket, uploadedKey);
-              } catch {/* ignore */}
+              const transcript = res.transcript.trim() || res.segments.map(seg => seg.text).join("\n").trim();
+              return buildSuccess(
+                transcript,
+                res.segments,
+                null,
+                {
+                  totalChunks: 1,
+                  processedChunks: 1,
+                  startChunk: 0
+                },
+                res.usage
+              );
+            } finally {
+              // Clean up S3 object even if transcription fails
+              if (uploadedBucket && uploadedKey && S3_DELETE_AFTER) {
+                try {
+                  await s3.deleteObject(uploadedBucket, uploadedKey);
+                } catch {/* ignore cleanup errors */}
+              }
             }
-
-            const transcript = res.transcript.trim() || res.segments.map(seg => seg.text).join("\n").trim();
-            return buildSuccess(transcript, res.segments, null, {
-              totalChunks: 1,
-              processedChunks: 1,
-              startChunk: 0
-            });
           };
 
           const runSingleViaUpload = async () => {
@@ -760,11 +997,17 @@ export const geminiTranscriber = createSdkMcpServer({
               instructionsBase
             });
             const transcript = res.transcript.trim() || res.segments.map(seg => seg.text).join("\n").trim();
-            return buildSuccess(transcript, res.segments, null, {
-              totalChunks: 1,
-              processedChunks: 1,
-              startChunk: 0
-            });
+            return buildSuccess(
+              transcript,
+              res.segments,
+              null,
+              {
+                totalChunks: 1,
+                processedChunks: 1,
+                startChunk: 0
+              },
+              res.usage
+            );
           };
 
           const runSingle = async () => {
@@ -781,25 +1024,42 @@ export const geminiTranscriber = createSdkMcpServer({
             return await runSingleViaUpload();
           };
 
-          // Prefer presigned single-pass regardless of duration; fallback to chunking on failure
-          if (preferPresigned) {
-            try {
-              return await runSingle();
-            } catch {
-              // fall through to chunking
-            }
-          } else {
-            if (!shouldChunkDefault) {
-              return await runSingle();
+          // ALWAYS try single-pass first, regardless of duration or input mode
+          // Let Gemini decide if it can handle the file - don't pre-judge
+          try {
+            return await runSingle();
+          } catch (error) {
+            // Only chunk if Gemini explicitly fails with timeout or file-too-large
+            const sanitized = sanitizeError(error);
+            const isTimeout = isTimeoutLikeError(error);
+            const isTooLarge = isFileTooLargeError(error);
+
+            if (isTimeout || isTooLarge) {
+              const reason = isTimeout ? "timeout" : "file too large";
+              safeLog('warn', {
+                error: sanitized,
+                duration,
+                fileSize: Number(fileStats.size) || 0,
+                reason
+              }, `⚠️  Single-pass transcription failed (${reason}), falling back to chunked transcription`);
+              // Fall through to chunking logic below
+            } else {
+              // Other errors should fail immediately - don't hide them with chunking
+              throw error;
             }
           }
+
+          // Chunking logic below (only reached if single-pass failed with timeout/too-large)
+          safeLog('info', {
+            reason: 'fallback',
+            duration,
+            chunkSeconds
+          }, `📦 Single-pass failed, using chunked transcription as fallback`);
 
           const normalizedStartChunk =
             Number.isFinite(startChunk) && startChunk > 0
               ? Math.floor(startChunk)
               : 0;
-
-          // If we got here, we either prefer upload mode and need chunking, or presigned failed and we must chunk
 
           let tmpDir: string | null = null;
           try {
@@ -855,6 +1115,11 @@ export const geminiTranscriber = createSdkMcpServer({
               }
             );
 
+            const aggregatedUsage = chunkResults.reduce<GeminiTokenUsage | null>(
+              (acc, result) => addTokenUsageTotals(acc, result.usage),
+              null
+            );
+
             const transcriptParts = chunkResults.map(r => r.transcript.trim()).filter(Boolean);
             const mergedSegments = chunkResults
               .flatMap(r => r.segments)
@@ -873,7 +1138,7 @@ export const geminiTranscriber = createSdkMcpServer({
               totalChunks,
               processedChunks: selectedChunks.length,
               startChunk: normalizedStartChunk
-            });
+            }, aggregatedUsage);
           } finally {
             if (tmpDir) {
               await cleanupTempDir(tmpDir);

@@ -2,6 +2,9 @@
  * Sanitization utilities to prevent sensitive data leakage in error messages and logs.
  */
 
+import path from "node:path";
+import { PROJECT_ROOT } from "./paths.js";
+
 export interface SanitizedError {
   name: string;
   message: string;
@@ -10,21 +13,23 @@ export interface SanitizedError {
   [key: string]: unknown;
 }
 
-const SENSITIVE_FIELD_PATTERNS = [
-  /password/i,
-  /apikey/i,
-  /api_key/i,
-  /token/i,
-  /secret/i,
-  /authorization/i,
-  /auth/i,
-  /bearer/i,
-  /credential/i,
-  /key/i
+export const SENSITIVE_FIELD_PATTERNS = [
+  /\bpassword\b/i,
+  /\bapi[_-]?key\b/i,
+  /\btoken\b/i,
+  /\bsecret\b/i,
+  /\bauthorization\b/i,
+  /\bauth\b/i,
+  /\bbearer\b/i,
+  /\bcredential(?:s)?\b/i,
+  /\baccess[_-]?token\b/i,
+  /\brefresh[_-]?token\b/i
 ];
 
 const API_KEY_PATTERN = /\b(sk-[a-zA-Z0-9]{32,}|AIza[a-zA-Z0-9_-]{35})\b/g;
 const REDACTED = "[REDACTED]";
+const PROJECT_ROOT_NORMALIZED = path.resolve(PROJECT_ROOT);
+const PROJECT_ROOT_WINDOWS = PROJECT_ROOT_NORMALIZED.replace(/\//g, "\\");
 
 /**
  * Sanitizes an error object by removing sensitive fields and truncating stack traces.
@@ -125,13 +130,46 @@ export function sanitizeError(error: unknown): SanitizedError {
 
 /**
  * Sanitizes file paths by converting absolute paths to relative paths.
- * @param path - The path string to sanitize
+ * @param value - The path string to sanitize
  * @returns A sanitized path with sensitive directory information removed
  */
-export function sanitizePath(path: string): string {
-  if (!path) return path;
+export function sanitizePath(value: string): string {
+  if (!value) return value;
 
-  // Remove common sensitive path prefixes
+  // If string looks like a standalone path, attempt to convert to project-relative path
+  if (!/\r|\n/.test(value)) {
+    try {
+      const candidate = path.isAbsolute(value)
+        ? value
+        : path.resolve(PROJECT_ROOT_NORMALIZED, value);
+      const relative = path.relative(PROJECT_ROOT_NORMALIZED, candidate);
+      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        return relative || ".";
+      }
+    } catch {
+      // Fallback to pattern replacement below
+    }
+  }
+
+  const replacements: Array<{ pattern: RegExp; replacement: string }> = [
+    {
+      pattern: new RegExp(escapeForRegex(`${PROJECT_ROOT_NORMALIZED}${path.sep}`), "g"),
+      replacement: ""
+    },
+    {
+      pattern: new RegExp(escapeForRegex(PROJECT_ROOT_NORMALIZED), "g"),
+      replacement: "."
+    },
+    {
+      pattern: new RegExp(escapeForRegex(`${PROJECT_ROOT_WINDOWS}\\`), "g"),
+      replacement: ""
+    },
+    {
+      pattern: new RegExp(escapeForRegex(PROJECT_ROOT_WINDOWS), "g"),
+      replacement: "."
+    }
+  ];
+
   const sensitivePatterns = [
     /\/Users\/[^/]+/g,
     /\/home\/[^/]+/g,
@@ -139,7 +177,10 @@ export function sanitizePath(path: string): string {
     /\/private\/[^/]+/g
   ];
 
-  let sanitized = path;
+  let sanitized = value;
+  for (const { pattern, replacement } of replacements) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
   for (const pattern of sensitivePatterns) {
     sanitized = sanitized.replace(pattern, "~");
   }
@@ -229,4 +270,8 @@ export function sanitizeForLogging(data: unknown, maxDepth: number = 3): unknown
  */
 function isSensitiveField(fieldName: string): boolean {
   return SENSITIVE_FIELD_PATTERNS.some(pattern => pattern.test(fieldName));
+}
+
+function escapeForRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

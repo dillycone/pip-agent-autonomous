@@ -1,3 +1,5 @@
+import { Readable } from "node:stream";
+
 /**
  * Gemini Service - Dependency Injection Wrapper for Google Gen AI SDK
  *
@@ -31,6 +33,8 @@ export interface UploadedFile {
   fileMimeType?: string;
 }
 
+export type GeminiUploadSource = string | Buffer | Readable;
+
 /**
  * Parameters for content generation
  */
@@ -59,6 +63,8 @@ export interface GenerateContentResult {
   response?: {
     text?: () => string;
   };
+  /** Usage metadata including token counts (if provided by API) */
+  usageMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -81,7 +87,7 @@ export interface IGeminiService {
    * @returns Upload result with file URI and metadata
    * @throws Error if upload fails
    */
-  uploadFile(filePath: string, mimeType: string): Promise<UploadedFile>;
+  uploadFile(file: GeminiUploadSource, mimeType: string): Promise<UploadedFile>;
 
   /**
    * Generate content using Gemini model
@@ -134,27 +140,41 @@ export class GeminiService implements IGeminiService {
   /**
    * Upload a file to Gemini for processing
    *
-   * @param filePath - Absolute path to the file to upload
+   * @param file - Absolute path, Buffer, or Readable stream for the file to upload
    * @param mimeType - MIME type of the file
    * @returns Upload result with file URI and metadata
    */
-  async uploadFile(filePath: string, mimeType: string): Promise<UploadedFile> {
+  async uploadFile(file: GeminiUploadSource, mimeType: string): Promise<UploadedFile> {
     const ai = await this.ensureClient();
 
-    const uploaded = await ai.files.upload({
-      file: filePath,
+    const payload: Record<string, unknown> = {
       config: { mimeType }
-    });
+    };
+
+    if (typeof file === "string") {
+      payload.file = file;
+    } else if (Buffer.isBuffer(file)) {
+      payload.file = file;
+    } else if (isReadableStream(file)) {
+      payload.file = file;
+    } else {
+      throw new Error("Unsupported upload source type for GeminiService.uploadFile");
+    }
+
+    const uploaded = await ai.files.upload(payload);
 
     // Normalize the response structure (API may return different shapes)
-    const uploadedFile: any = (uploaded as any).file ?? uploaded;
+    const normalized = normalizeUploadedFile(uploaded);
 
-    return {
-      uri: uploadedFile?.uri,
-      fileUri: uploadedFile?.fileUri,
-      mimeType: uploadedFile?.mimeType,
-      fileMimeType: uploadedFile?.fileMimeType
-    };
+    if (!normalized.uri && !normalized.fileUri) {
+      throw new Error("Gemini upload response missing file URI");
+    }
+
+    if (!normalized.mimeType && !normalized.fileMimeType) {
+      normalized.mimeType = mimeType;
+    }
+
+    return normalized;
   }
 
   /**
@@ -172,9 +192,20 @@ export class GeminiService implements IGeminiService {
       config: params.config
     } as any);
 
+    const rawResult = result as Record<string, unknown>;
+    const text = typeof rawResult.text === "string" ? rawResult.text : undefined;
+    const rawResponse = rawResult.response;
+
+    let response: GenerateContentResult["response"];
+    if (rawResponse && typeof rawResponse === "object" && typeof (rawResponse as any).text === "function") {
+      const textFn = (rawResponse as { text: () => string }).text.bind(rawResponse);
+      response = { text: textFn };
+    }
+
     return {
-      text: (result as any).text,
-      response: (result as any).response
+      text,
+      response,
+      usageMetadata: extractUsageMetadata(result)
     };
   }
 }
@@ -196,4 +227,73 @@ export class GeminiService implements IGeminiService {
  */
 export function createGeminiService(apiKey: string): IGeminiService {
   return new GeminiService(apiKey);
+}
+
+function isReadableStream(value: unknown): value is Readable {
+  return value instanceof Readable ||
+    (value !== null &&
+      typeof value === "object" &&
+      typeof (value as Readable).pipe === "function");
+}
+
+function normalizeUploadedFile(uploaded: unknown): UploadedFile {
+  const normalized: UploadedFile = {};
+
+  if (!uploaded || (typeof uploaded !== "object" && typeof uploaded !== "function")) {
+    return normalized;
+  }
+  const payload = (uploaded as any).file ?? uploaded;
+  if (!payload || typeof payload !== "object") {
+    return normalized;
+  }
+  const candidate = payload as Record<string, unknown>;
+
+  if (typeof candidate.uri === "string") {
+    normalized.uri = candidate.uri;
+  }
+  if (typeof candidate.fileUri === "string") {
+    normalized.fileUri = candidate.fileUri;
+  }
+  if (typeof candidate.mimeType === "string") {
+    normalized.mimeType = candidate.mimeType;
+  }
+  if (typeof candidate.fileMimeType === "string") {
+    normalized.fileMimeType = candidate.fileMimeType;
+  }
+
+  return normalized;
+}
+
+/**
+ * Extract usage metadata from the Gemini SDK response.
+ *
+ * The SDK may expose usage metadata on either the root response object or nested
+ * within the response payload. This helper normalizes the common cases so callers
+ * can reliably access token counts without having to inspect undocumented shapes.
+ */
+function extractUsageMetadata(result: unknown): Record<string, unknown> | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+
+  const candidates = [
+    (result as any).usageMetadata,
+    (result as any).usage_metadata,
+    (result as any).response?.usageMetadata,
+    (result as any).response?.usage_metadata,
+    Array.isArray((result as any).response?.candidates)
+      ? (result as any).response.candidates[0]?.usageMetadata
+      : undefined,
+    Array.isArray((result as any).response?.candidates)
+      ? (result as any).response.candidates[0]?.usage_metadata
+      : undefined
+  ];
+
+  for (const entry of candidates) {
+    if (entry && typeof entry === "object") {
+      return entry as Record<string, unknown>;
+    }
+  }
+
+  return undefined;
 }

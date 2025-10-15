@@ -115,10 +115,13 @@ export const PIP_MAX_OUTPUT_TOKENS = Number.isFinite(Number(process.env.PIP_MAX_
 
 /**
  * Maximum number of review rounds with policy judge
- * After this many attempts, pipeline will fail if not approved
- * Default: 2
+ * Clamped to 0–1 so the judge is consulted at most once per run.
+ * Default (and maximum): 1
  */
-export const MAX_REVIEW_ROUNDS = Number(process.env.MAX_REVIEW_ROUNDS || 2);
+const REQUESTED_REVIEW_ROUNDS = Number(process.env.MAX_REVIEW_ROUNDS);
+export const MAX_REVIEW_ROUNDS = Number.isFinite(REQUESTED_REVIEW_ROUNDS)
+  ? Math.max(0, Math.min(1, Math.floor(REQUESTED_REVIEW_ROUNDS)))
+  : 1;
 
 /**
  * Maximum turns allowed for the main agent orchestration
@@ -150,17 +153,29 @@ export const LOG_PRETTY = process.env.NODE_ENV !== "production";
 
 /**
  * Default chunk duration in seconds for long audio files
- * Audio longer than MAX_SINGLE_DURATION will be split into chunks of this size
+ *
+ * Used ONLY as a fallback when single-pass transcription fails due to
+ * timeout or file-too-large errors. The system always attempts single-pass
+ * first regardless of file duration.
+ *
+ * Audio will be split into chunks of this size when chunking is needed.
  * Default: 30 seconds (minimum 10)
  */
 export const GEMINI_CHUNK_SECONDS = Math.max(10, Number(process.env.GEMINI_CHUNK_SECONDS || 30));
 
 /**
- * Maximum duration (in seconds) for single-pass transcription
- * Audio longer than this will be automatically chunked
- * Default: 45 seconds
+ * Duration threshold hint for single-pass transcription (seconds)
+ *
+ * NOTE: This is now INFORMATIONAL ONLY. The system ALWAYS attempts
+ * single-pass transcription first regardless of duration, and only
+ * chunks if Gemini explicitly fails (timeout or file too large).
+ *
+ * Gemini 2.5 Pro supports up to ~9.5 hours (34,200 seconds) of audio.
+ * This threshold is used only for logging and progress estimation.
+ *
+ * Default: 3600 seconds (1 hour)
  */
-export const GEMINI_SINGLE_PASS_MAX = Number(process.env.GEMINI_SINGLE_PASS_MAX || 45);
+export const GEMINI_SINGLE_PASS_MAX = Number(process.env.GEMINI_SINGLE_PASS_MAX || 3600);
 
 /**
  * Concurrency for parallel chunk transcription
@@ -211,11 +226,11 @@ export const S3_DELETE_AFTER = String(process.env.S3_DELETE_AFTER || "true").toL
 
 /**
  * Input mode for Gemini file ingestion
- * - "presigned" → Upload to S3 and pass presigned URL to Gemini (preferred)
- * - "upload"    → Upload file to Gemini via SDK
- * Default: "presigned"
+ * - "upload"    → Upload file directly to Gemini via SDK (default)
+ * - "presigned" → Store an audit copy in S3 (presigned URL) before Gemini SDK upload
+ * Set GEMINI_INPUT_MODE to override; defaults to "upload".
  */
-export const GEMINI_INPUT_MODE = (process.env.GEMINI_INPUT_MODE || "presigned").toLowerCase();
+export const GEMINI_INPUT_MODE = (process.env.GEMINI_INPUT_MODE || "upload").toLowerCase();
 
 // ============================================================================
 // File Paths
@@ -315,7 +330,19 @@ export const PRICING = {
    * Cost per million tokens for cache reads (prompt caching)
    * $0.30 per MTK as of January 2025
    */
-  CACHE_READ_PER_MTK: 0.30
+  CACHE_READ_PER_MTK: 0.30,
+
+  /**
+   * Gemini 2.5 Pro transcription input cost per MTK (≤200k tokens per request)
+   * $1.25 per MTK as of October 2025
+   */
+  GEMINI_TRANSCRIBE_INPUT_PER_MTK: 1.25,
+
+  /**
+   * Gemini 2.5 Pro transcription output cost per MTK (≤200k tokens per request)
+   * $5.00 per MTK as of October 2025
+   */
+  GEMINI_TRANSCRIBE_OUTPUT_PER_MTK: 5.0
 } as const;
 
 // ============================================================================

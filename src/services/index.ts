@@ -25,7 +25,7 @@
  *
  * // Or mock for testing
  * const mockAnthropic: IAnthropicService = {
- *   generateMessage: async () => "test response"
+ *   generateMessage: async () => ({ text: "test response" })
  * };
  * ```
  */

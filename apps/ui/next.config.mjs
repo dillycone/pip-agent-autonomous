@@ -30,6 +30,10 @@ const nextConfig = {
     alias["@pip/agents"] = path.resolve(sourceRoot, "agents");
     alias["@pip/mcp"] = path.resolve(sourceRoot, "mcp");
     alias["@pip/types"] = path.resolve(sourceRoot, "types");
+    alias["@pip/utils"] = path.resolve(sourceRoot, "utils");
+    alias["@pip/server"] = path.resolve(sourceRoot, "server");
+    alias["@pip/pipeline"] = path.resolve(sourceRoot, "pipeline");
+    alias["@"] = __dirname;
 
     config.resolve = config.resolve ?? {};
     config.resolve.alias = alias;

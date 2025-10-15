@@ -10,7 +10,7 @@
  * - Child loggers for module-specific contexts
  */
 
-import { pino } from "pino";
+import pino, { type LevelWithSilent, type Logger } from "pino";
 
 /**
  * Determine if we're in development mode
@@ -21,22 +21,14 @@ const isDevelopment = process.env.NODE_ENV !== "production";
  * Get log level from environment or use default
  * Priority: LOG_LEVEL env var > default 'info'
  */
-const logLevel = (process.env.LOG_LEVEL || "info") as pino.LevelWithSilent;
+const logLevel = (process.env.LOG_LEVEL || "info") as LevelWithSilent;
 
 /**
  * Configure pino transport for pretty printing in development
+ * DISABLED: pino-pretty uses worker threads which don't work in Next.js webpack builds
+ * Use basic pino logging instead
  */
-const transport = isDevelopment
-  ? {
-      target: "pino-pretty",
-      options: {
-        colorize: true,
-        translateTime: "HH:MM:ss",
-        ignore: "pid,hostname",
-        singleLine: false
-      }
-    }
-  : undefined;
+const transport = undefined;
 
 /**
  * Main logger instance
@@ -78,7 +70,7 @@ export const logger = pino({
  * const moduleLogger = createChildLogger('gemini-transcriber');
  * moduleLogger.info('Processing audio file');
  */
-export function createChildLogger(name: string): pino.Logger {
+export function createChildLogger(name: string): Logger {
   return logger.child({ module: name });
 }
 

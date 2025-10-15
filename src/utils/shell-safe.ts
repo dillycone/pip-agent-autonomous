@@ -14,6 +14,7 @@
 import { spawn, SpawnOptions } from "node:child_process";
 import { extname } from "node:path";
 import { validateFilePath } from "./validation.js";
+import { PROJECT_ROOT } from "./paths.js";
 
 // ============================================================================
 // Command Whitelist
@@ -134,7 +135,8 @@ function validateArguments(
       // Allow paths that exist or look like output paths
       const validation = validateFilePath(arg, {
         mustExist: false, // Don't require existence (output files may not exist yet)
-        allowAbsolute: true // ffmpeg/ffprobe may need absolute paths
+        allowAbsolute: true, // ffmpeg/ffprobe may need absolute paths
+        baseDir: PROJECT_ROOT
       });
 
       if (!validation.valid) {

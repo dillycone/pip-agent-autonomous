@@ -1,13 +1,28 @@
-import { basename, extname, join } from "node:path";
+import fs from "node:fs";
+import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { safeSpawn } from "../utils/shell-safe.js";
+import {
+  S3Client,
+  HeadBucketCommand,
+  CreateBucketCommand,
+  PutBucketCorsCommand,
+  GetBucketCorsCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  type CreateBucketCommandInput,
+  type BucketLocationConstraint
+} from "@aws-sdk/client-s3";
+import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
+import { fromIni } from "@aws-sdk/credential-providers";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createChildLogger } from "../utils/logger.js";
 import { sanitizeError } from "../utils/sanitize.js";
 
 export interface UploadResult {
   bucket: string;
   key: string;
-  url: string; // presigned URL
+  url: string;
   region: string;
 }
 
@@ -24,91 +39,106 @@ export interface IS3Service {
 }
 
 export class S3Service implements IS3Service {
+  private logger = createChildLogger("s3-service");
+  private s3Client?: S3Client;
+  private stsClient?: STSClient;
+
   constructor(private profile: string) {}
 
-  private logger = createChildLogger("s3-service");
-
-  private async aws(args: string[], opts?: { timeout?: number }) {
-    // Use validatePaths: false to allow s3:// URIs
-    try {
-      return await safeSpawn("aws", args, { timeout: opts?.timeout ?? 120000, validatePaths: false });
-    } catch (err) {
-      const msg = String((err as any)?.message || err || "");
-      const ssoExpired = /Token has expired and refresh failed|SSO.+expired|sso login required/i.test(msg);
-      if (!ssoExpired) throw err;
-      // Attempt interactive SSO login (opens browser) then retry once
-      this.logger.info({ profile: this.profile }, "AWS SSO token expired; attempting 'aws sso login'");
-      try {
-        await safeSpawn("aws", ["sso", "login", "--profile", this.profile], { timeout: 10 * 60 * 1000, validatePaths: false });
-      } catch (e1) {
-        // As a fallback, try device code flow (no-browser)
-        this.logger.warn({ profile: this.profile }, "Interactive SSO login failed; attempting device code (--no-browser)");
-        await safeSpawn("aws", ["sso", "login", "--no-browser", "--profile", this.profile], { timeout: 10 * 60 * 1000, validatePaths: false });
-      }
-      // Retry original command once
-      return await safeSpawn("aws", args, { timeout: opts?.timeout ?? 120000, validatePaths: false });
+  private getS3Client(): S3Client {
+    if (!this.s3Client) {
+      this.s3Client = new S3Client({
+        credentials: fromIni({ profile: this.profile })
+      });
     }
+    return this.s3Client;
+  }
+
+  private getStsClient(): STSClient {
+    if (!this.stsClient) {
+      this.stsClient = new STSClient({
+        credentials: fromIni({ profile: this.profile })
+      });
+    }
+    return this.stsClient;
   }
 
   private async getRegion(): Promise<string> {
     try {
-      const { stdout } = await this.aws(["configure", "get", "region", "--profile", this.profile], { timeout: 10000 });
-      const region = stdout.trim() || "us-east-1";
-      return region;
-    } catch {
-      return "us-east-1";
+      const client = this.getS3Client();
+      const regionProvider = client.config.region;
+      if (typeof regionProvider === "string") {
+        return regionProvider || "us-east-1";
+      }
+      if (typeof regionProvider === "function") {
+        const resolved = await regionProvider();
+        return resolved || "us-east-1";
+      }
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      this.logger.warn({ error: sanitized }, "Failed to resolve S3 region from client config");
     }
+    return "us-east-1";
   }
 
   private async getAccountId(): Promise<string | null> {
     try {
-      const { stdout } = await this.aws(["sts", "get-caller-identity", "--query", "Account", "--output", "text", "--profile", this.profile], { timeout: 10000 });
-      return stdout.trim() || null;
-    } catch {
+      const sts = this.getStsClient();
+      const response = await sts.send(new GetCallerIdentityCommand({}));
+      return response.Account ?? null;
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      this.logger.warn({ error: sanitized }, "Failed to resolve AWS account ID");
       return null;
     }
   }
 
   private async bucketExists(bucket: string): Promise<boolean> {
     try {
-      await this.aws(["s3api", "head-bucket", "--bucket", bucket, "--profile", this.profile], { timeout: 15000 });
+      const s3 = this.getS3Client();
+      await s3.send(new HeadBucketCommand({ Bucket: bucket }));
       return true;
-    } catch {
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      if (sanitized.code === "NotFound" || sanitized.code === "404") {
+        return false;
+      }
+      this.logger.debug({ bucket, error: sanitized }, "HeadBucket failed, treating as non-existent");
       return false;
     }
   }
 
   private async ensureCors(bucket: string): Promise<void> {
-    // Try to read CORS; if missing, apply a permissive read CORS suitable for presigned GET
+    const s3 = this.getS3Client();
     try {
-      await this.aws(["s3api", "get-bucket-cors", "--bucket", bucket, "--profile", this.profile], { timeout: 10000 });
-      // If the command succeeds, leave existing CORS as-is
+      await s3.send(new GetBucketCorsCommand({ Bucket: bucket }));
       return;
-    } catch {
-      const corsConfig = {
-        CORSRules: [
-          {
-            AllowedOrigins: ["*"],
-            AllowedMethods: ["GET", "HEAD"],
-            AllowedHeaders: ["*"],
-            ExposeHeaders: ["ETag"],
-            MaxAgeSeconds: 300
-          }
-        ]
-      };
-      const json = JSON.stringify(corsConfig);
-      try {
-        await this.aws([
-          "s3api", "put-bucket-cors",
-          "--bucket", bucket,
-          "--cors-configuration", json,
-          "--profile", this.profile
-        ], { timeout: 10000 });
-        this.logger.info({ bucket }, "Applied default S3 CORS configuration");
-      } catch (err) {
-        const e = sanitizeError(err);
-        this.logger.warn({ err: e, bucket }, "Failed to set CORS (continuing)");
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      const missingConfig = ["NoSuchCORSConfiguration", "404"].includes(sanitized.code ?? "");
+      if (!missingConfig) {
+        this.logger.warn({ bucket, error: sanitized }, "Failed to read existing CORS configuration; attempting to overwrite");
       }
+    }
+
+    const corsConfig = {
+      CORSRules: [
+        {
+          AllowedOrigins: ["*"],
+          AllowedMethods: ["GET", "HEAD"],
+          AllowedHeaders: ["*"],
+          ExposeHeaders: ["ETag"],
+          MaxAgeSeconds: 300
+        }
+      ]
+    };
+
+    try {
+      await s3.send(new PutBucketCorsCommand({ Bucket: bucket, CORSConfiguration: corsConfig }));
+      this.logger.info({ bucket }, "Applied default S3 CORS configuration");
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      this.logger.warn({ bucket, error: sanitized }, "Failed to apply S3 CORS configuration");
     }
   }
 
@@ -117,32 +147,28 @@ export class S3Service implements IS3Service {
     let bucket = (explicitBucket || "").trim();
 
     if (!bucket) {
-      const acct = await this.getAccountId();
+      const accountId = await this.getAccountId();
       const base = "pip-agent-autonomous-audio";
-      const suffix = acct ? `${acct}-${region}` : `${region}-${randomUUID().slice(0, 8)}`;
+      const suffix = accountId ? `${accountId}-${region}` : `${region}-${randomUUID().slice(0, 8)}`;
       bucket = `${base}-${suffix}`.toLowerCase();
     }
 
     const exists = await this.bucketExists(bucket);
     if (!exists) {
       try {
-        if (region === "us-east-1") {
-          await this.aws(["s3api", "create-bucket", "--bucket", bucket, "--region", region, "--profile", this.profile]);
-        } else {
-          await this.aws([
-            "s3api", "create-bucket",
-            "--bucket", bucket,
-            "--region", region,
-            "--create-bucket-configuration", `LocationConstraint=${region}`,
-            "--profile", this.profile
-          ]);
+        const s3 = this.getS3Client();
+        const params: CreateBucketCommandInput = { Bucket: bucket };
+        if (region !== "us-east-1") {
+          const locationConstraint = region as BucketLocationConstraint;
+          params.CreateBucketConfiguration = { LocationConstraint: locationConstraint };
         }
+        await s3.send(new CreateBucketCommand(params));
         this.logger.info({ bucket, region }, "Created S3 bucket");
         await this.ensureCors(bucket);
-      } catch (err) {
-        const e = sanitizeError(err);
-        this.logger.error({ err: e, bucket, region }, "Failed to create bucket");
-        throw new Error(`Failed to create S3 bucket '${bucket}' in ${region}: ${e.message || e}`);
+      } catch (error) {
+        const sanitized = sanitizeError(error);
+        this.logger.error({ bucket, region, error: sanitized }, "Failed to create S3 bucket");
+        throw new Error(`Failed to create S3 bucket '${bucket}' in ${region}: ${sanitized.message}`);
       }
     }
 
@@ -171,42 +197,51 @@ export class S3Service implements IS3Service {
     const { filePath, mimeType, bucket: bucketMaybe, prefix, expiresInSeconds } = params;
     const { bucket, region } = await this.ensureBucket(bucketMaybe);
     await this.ensureCors(bucket);
+
     const key = this.buildKey(prefix, filePath);
+    const s3 = this.getS3Client();
 
-    // Upload
-    await this.aws([
-      "s3", "cp",
-      filePath,
-      `s3://${bucket}/${key}`,
-      "--content-type", mimeType,
-      "--only-show-errors",
-      "--profile", this.profile
-    ], { timeout: 10 * 60 * 1000 });
-
-    // Presign
-    const { stdout } = await this.aws([
-      "s3", "presign",
-      `s3://${bucket}/${key}`,
-      "--expires-in", String(Math.max(60, expiresInSeconds)),
-      "--profile", this.profile
-    ], { timeout: 15000 });
-
-    const url = stdout.trim();
-    if (!url.startsWith("http")) {
-      throw new Error("Failed to generate presigned URL");
+    try {
+      const fileStream = fs.createReadStream(filePath);
+      await s3.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: fileStream,
+        ContentType: mimeType
+      }));
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      this.logger.error({ bucket, key, error: sanitized }, "Failed to upload object to S3");
+      throw new Error(`Failed to upload ${filePath} to s3://${bucket}/${key}: ${sanitized.message}`);
     }
 
-    this.logger.info({ bucket, key, region, expiresInSeconds }, "Uploaded and presigned S3 object");
-    return { bucket, key, url, region };
+    try {
+      const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+      const url = await getSignedUrl(s3, command, {
+        expiresIn: Math.max(60, expiresInSeconds)
+      });
+
+      if (!url.startsWith("http")) {
+        throw new Error("Invalid presigned URL returned by AWS SDK");
+      }
+
+      this.logger.info({ bucket, key, region, expiresInSeconds }, "Uploaded and presigned S3 object");
+      return { bucket, key, url, region };
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      this.logger.error({ bucket, key, error: sanitized }, "Failed to presign S3 object");
+      throw new Error(`Failed to presign s3://${bucket}/${key}: ${sanitized.message}`);
+    }
   }
 
   async deleteObject(bucket: string, key: string): Promise<void> {
     try {
-      await this.aws(["s3", "rm", `s3://${bucket}/${key}`, "--only-show-errors", "--profile", this.profile], { timeout: 20000 });
+      const s3 = this.getS3Client();
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
       this.logger.info({ bucket, key }, "Deleted S3 object");
-    } catch (err) {
-      const e = sanitizeError(err);
-      this.logger.warn({ err: e, bucket, key }, "Failed to delete S3 object (continuing)");
+    } catch (error) {
+      const sanitized = sanitizeError(error);
+      this.logger.warn({ bucket, key, error: sanitized }, "Failed to delete S3 object (continuing)");
     }
   }
 }

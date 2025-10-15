@@ -18,6 +18,7 @@ import {
   createAnthropicService,
   createFileSystemService
 } from "../services/index.js";
+import type { UsageMetrics } from "../types/index.js";
 import { createChildLogger } from "../utils/logger.js";
 
 const logger = createChildLogger("pip-generator");
@@ -33,7 +34,7 @@ async function generateDraft(
   },
   anthropicService: IAnthropicService,
   fsService: IFileSystemService
-) {
+): Promise<{ draft: string; usage?: UsageMetrics }> {
   const promptPathResolved = path.resolve(params.promptPath);
   const promptRaw = await fsService.readFile(promptPathResolved, "utf-8") as string;
 
@@ -61,7 +62,7 @@ async function generateDraft(
 
   const systemPrompt = `You are an HR specialist analyzing a meeting transcript. Extract only the performance issues that are explicitly discussed in the transcript. Follow the format instructions exactly. Do not add information not present in the transcript. Output in ${params.outputLanguage}.`;
 
-  const text = await anthropicService.generateMessage({
+  const { text, usage } = await anthropicService.generateMessage({
     model: params.model,
     maxTokens: params.maxOutputTokens,
     temperature: params.temperature,
@@ -72,7 +73,7 @@ async function generateDraft(
   if (!text) {
     throw new PIPGenerationError("Claude returned an empty draft.");
   }
-  return text;
+  return { draft: text, usage };
 }
 
 // Create services once at module level for reuse
@@ -108,7 +109,7 @@ export const pipGenerator = createSdkMcpServer({
       async ({ transcript, outputLanguage, promptPath, model, temperature, maxOutputTokens }) => {
         try {
           const anthropic = getAnthropicService();
-          const draft = await generateDraft(
+          const { draft, usage } = await generateDraft(
             {
               transcript,
               outputLanguage,
@@ -120,7 +121,7 @@ export const pipGenerator = createSdkMcpServer({
             anthropic,
             fsService
           );
-          return mcpSuccess({ draft });
+          return mcpSuccess({ draft, usage });
         } catch (error: unknown) {
           // Check for custom errors first
           if (error instanceof PIPGenerationError || error instanceof ConfigurationError) {

@@ -425,20 +425,13 @@ export function sanitizeForShellCommand(arg: string): string {
     return "";
   }
 
-  // Remove null bytes
-  let sanitized = arg.replace(/\x00/g, "");
+  const withoutNullBytes = arg.replace(/\x00/g, "");
 
-  // Escape shell metacharacters
-  sanitized = sanitized.replace(SHELL_METACHARACTERS, (char) => {
-    // For backtick, quote, and dollar sign, use backslash escape
-    if (char === "`" || char === "$" || char === '"' || char === "'") {
-      return "\\" + char;
-    }
-    // For other dangerous characters, replace with underscore
-    return "_";
-  });
+  if (withoutNullBytes.includes("\n") || withoutNullBytes.includes("\r")) {
+    throw new Error("Shell argument contains newline characters");
+  }
 
-  return sanitized;
+  return withoutNullBytes.replace(/[;&|`$()\\<>"']/g, char => `\\${char}`);
 }
 
 /**
@@ -492,11 +485,15 @@ export function validateOutputPath(
   options?: {
     extensions?: string[];
     allowOverwrite?: boolean;
+    baseDir?: string;
+    allowAbsolute?: boolean;
   }
 ): ValidationResult {
   const opts = {
     extensions: options?.extensions ?? [],
     allowOverwrite: options?.allowOverwrite ?? true,
+    baseDir: options?.baseDir ?? process.cwd(),
+    allowAbsolute: options?.allowAbsolute ?? false
   };
 
   // Validate basic path security
@@ -504,7 +501,8 @@ export function validateOutputPath(
     mustExist: false,
     extensions: opts.extensions,
     mustBeFile: false,
-    allowAbsolute: true
+    allowAbsolute: opts.allowAbsolute,
+    baseDir: opts.baseDir
   });
 
   if (!pathValidation.valid) {

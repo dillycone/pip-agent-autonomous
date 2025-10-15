@@ -37,6 +37,27 @@
       ],
       "@pip/types": [
         "../../src/types"
+      ],
+      "@pip/pipeline/*": [
+        "../../src/pipeline/*"
+      ],
+      "@pip/pipeline": [
+        "../../src/pipeline"
+      ],
+      "@pip/utils/*": [
+        "../../src/utils/*"
+      ],
+      "@pip/utils": [
+        "../../src/utils"
+      ],
+      "@pip/server/*": [
+        "../../src/server/*"
+      ],
+      "@pip/server": [
+        "../../src/server"
+      ],
+      "@/*": [
+        "./*"
       ]
     },
     "types": [

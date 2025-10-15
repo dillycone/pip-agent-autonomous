@@ -6,10 +6,11 @@ import Docxtemplater from "docxtemplater";
 import { sanitizeError, sanitizePath } from "../utils/sanitize.js";
 import { mcpError } from "../utils/safe-stringify.js";
 import { mcpSuccess } from "../utils/mcp-helpers.js";
-import { validateOutputPath } from "../utils/validation.js";
+import { validateFilePath, validateOutputPath } from "../utils/validation.js";
 import { DocumentExportError } from "../errors/index.js";
 import { createChildLogger } from "../utils/logger.js";
 import { isDocxImport, type DocxImport } from "../types/index.js";
+import { PROJECT_ROOT } from "../utils/paths.js";
 import {
   IFileSystemService,
   createFileSystemService
@@ -37,14 +38,32 @@ export const docxExporter = createSdkMcpServer({
       async ({ templatePath, outputPath, body, language, title }) => {
         let safeOutputPath: string = outputPath; // Default fallback for error reporting
         try {
-          const validationResult = validateOutputPath(outputPath, { extensions: [".docx"], allowOverwrite: true });
+          const validationResult = validateOutputPath(outputPath, {
+            extensions: [".docx"],
+            allowOverwrite: true,
+            baseDir: PROJECT_ROOT,
+            allowAbsolute: true
+          });
           if (!validationResult.valid || !validationResult.sanitizedPath) {
             throw new DocumentExportError(`Invalid output path: ${validationResult.error || 'Path validation failed'}`);
           }
           safeOutputPath = validationResult.sanitizedPath;
 
-          if (fsService.existsSync(templatePath)) {
-            const content = await fsService.readFile(templatePath) as Buffer;
+          const templateCheck = validateFilePath(templatePath, {
+            mustExist: false,
+            mustBeFile: true,
+            extensions: [".docx"],
+            allowAbsolute: true,
+            baseDir: PROJECT_ROOT
+          });
+
+          if (!templateCheck.valid || !templateCheck.sanitizedPath) {
+            throw new DocumentExportError(`Invalid template path: ${templateCheck.error || "Path validation failed"}`);
+          }
+
+          const safeTemplate = templateCheck.sanitizedPath;
+          if (fsService.existsSync(safeTemplate)) {
+            const content = await fsService.readFile(safeTemplate) as Buffer;
             const zip = new PizZip(content);
             const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
             doc.render({ pip_body: body, language, title, date: new Date().toISOString().slice(0,10) });
@@ -54,7 +73,7 @@ export const docxExporter = createSdkMcpServer({
             const outputDir = path.dirname(safeOutputPath);
             await fsService.mkdir(outputDir, { recursive: true });
 
-            logger.info({ outputPath: safeOutputPath, usingTemplate: true }, `[docx-exporter] writing template-based docx to ${safeOutputPath}`);
+            logger.info({ outputPath: safeOutputPath, templatePath: safeTemplate, usingTemplate: true }, `[docx-exporter] writing template-based docx to ${safeOutputPath}`);
             await fsService.writeFile(safeOutputPath, buf);
             return mcpSuccess({ outputPath: safeOutputPath });
           } else {
