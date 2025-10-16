@@ -206,7 +206,7 @@ export const geminiTranscriber = createSdkMcpServer({
               modelId,
               instructionsBase,
               retries: GEMINI_TRANSCRIBE_RETRIES,
-              thinkingBudget: 0
+              thinkingBudget: 128
             });
 
             if (uploadedBucket && uploadedKey && S3_DELETE_AFTER) {
@@ -232,7 +232,7 @@ export const geminiTranscriber = createSdkMcpServer({
               modelId,
               instructionsBase,
               retries: GEMINI_TRANSCRIBE_RETRIES,
-              thinkingBudget: 0
+              thinkingBudget: 128
             });
             const transcript = res.transcript.trim() || res.segments.map(seg => seg.text).join("\n").trim();
             return buildSuccess(transcript, res.segments, null, {
@@ -308,7 +308,7 @@ export const geminiTranscriber = createSdkMcpServer({
                   modelId,
                   instructionsBase,
                   retries: GEMINI_TRANSCRIBE_RETRIES,
-                  thinkingBudget: 0
+                  thinkingBudget: 128
                 }),
               { concurrency: 1, onProgress: (completed, total) => {
                 const absoluteCompleted = normalizedStartChunk + completed;

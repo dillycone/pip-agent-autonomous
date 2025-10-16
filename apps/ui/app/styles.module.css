@@ -297,7 +297,7 @@
 .artifacts {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: 16px; /* slightly larger spacing now that subsection labels are removed */
 }
 
 .round {
@@ -350,6 +350,76 @@
   font-size: 12px;
   color: #64748b;
   word-break: break-word;
+}
+
+/* Centered heading for artifacts card */
+.centeredHeading {
+  text-align: center;
+}
+
+/* Preview toggle button (clean, unobtrusive) */
+.toggleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: #f1f5f9;            /* slate-100 */
+  border: 1px solid #e2e8f0;       /* slate-200 */
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+  margin-bottom: 8px;              /* space above preview block */
+}
+
+.toggleBtn:hover {
+  background: #e2e8f0;             /* slate-200 */
+  border-color: #cbd5e1;           /* slate-300 */
+}
+
+.toggleBtn:focus-visible {
+  outline: 2px solid #0ea5e9;      /* matches primary focus color */
+  outline-offset: 2px;
+}
+
+/* Icon-based download control */
+.downloadBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #0ea5e9;            /* blue primary */
+  color: #ffffff;                  /* icon color via currentColor */
+  border: 1px solid #7dd3fc;       /* light blue border */
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.05s ease;
+  line-height: 0;
+}
+
+.downloadBtn:hover {
+  background: #0284c7;
+  border-color: #38bdf8;
+  box-shadow: 0 6px 18px rgba(2, 132, 199, 0.25);
+}
+
+.downloadBtn:active { transform: translateY(1px); }
+.downloadBtn:focus-visible { outline: 2px solid #0ea5e9; outline-offset: 2px; }
+.downloadIcon { width: 20px; height: 20px; }
+
+/* Visually hidden but accessible text */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (max-width: 960px) {

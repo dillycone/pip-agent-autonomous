@@ -31,6 +31,7 @@ type CostState = {
   breakdown: Record<string, unknown>;
 };
 
+
 const ALLOWED_AUDIO_EXTENSIONS = [
   ".mp3",
   ".wav",
@@ -90,7 +91,6 @@ export default function Page() {
 
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; level: "info" | "warn" | "error" | "success" }>>([]);
 
-  const logRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const closeEventSource = useCallback((source: EventSource | null) => {
@@ -106,12 +106,6 @@ export default function Page() {
       eventSourceRef.current = null;
     };
   }, [closeEventSource]);
-
-  useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [logs]);
 
   const pushLog = useCallback((type: string, payload: unknown) => {
     setLogs((prev) => [...prev, { ts: Date.now(), type, payload }].slice(-5000));
@@ -461,41 +455,10 @@ export default function Page() {
               { key: "export", label: "Export", status: steps.export }
             ]}
           />
-
-          <Tabs>
-            <Tab title="Timeline">
-              <ActivityTimeline items={timeline} />
-            </Tab>
-            <Tab title="Logs (Raw)">
-              <div ref={logRef} className={styles.console}>
-                {logs.length === 0 ? (
-                  <div className={styles.logLinePlaceholder}>Stream output will appear here.</div>
-                ) : (
-                  logs.map((log, index) => (
-                    <div key={`${log.ts}-${index}`} className={styles.logLine}>
-                      <span className={styles.logTs}>{new Date(log.ts).toLocaleTimeString()}</span>
-                      <span className={styles.logType}>{log.type}</span>
-                      <span className={styles.logText}>
-                        {typeof log.payload === "string" ? log.payload : JSON.stringify(log.payload)}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Tab>
-            <Tab title="Transcript">
-              <pre className={styles.pre}>
-                {transcriptPreview.trim() ? transcriptPreview : "Transcript preview will appear here (first 1,500 characters)."}
-              </pre>
-            </Tab>
-            <Tab title="Cost">
-              <CostCard tokens={cost.tokens} usd={cost.usd} breakdown={cost.breakdown} />
-            </Tab>
-          </Tabs>
         </div>
 
         <div className={styles.rightCol}>
-          <Artifacts finalDraft={finalDraft} docxPath={docxPath} docxRelative={docxRelativePath} running={running} />
+          <Artifacts finalDraft={finalDraft} docxPath={docxPath} docxRelative={docxRelativePath} />
         </div>
       </section>
     </main>
@@ -527,100 +490,85 @@ function Stepper({ steps }: StepperProps) {
   );
 }
 
-type TabsProps = {
-  children: React.ReactNode;
-};
-
-type TabProps = {
-  title: string;
-  children: React.ReactNode;
-};
-
-function Tabs({ children }: TabsProps) {
-  const nodes = useMemo(() => {
-    return (Array.isArray(children) ? children : [children]) as React.ReactElement<TabProps>[];
-  }, [children]);
-
-  const [idx, setIdx] = useState(0);
-
-  return (
-    <div className={styles.tabs}>
-      <div className={styles.tabBar} role="tablist">
-        {nodes.map((child, i) => (
-          <button
-            key={child.props.title ?? i}
-            type="button"
-            role="tab"
-            aria-selected={idx === i}
-            className={`${styles.tabBtn} ${idx === i ? styles.active : ""}`}
-            onClick={() => setIdx(i)}
-          >
-            {child.props.title}
-          </button>
-        ))}
-      </div>
-      <div className={styles.tabPanel} role="tabpanel">
-        {nodes[idx]}
-      </div>
-    </div>
-  );
-}
-
-function Tab({ children }: TabProps) {
-  return <>{children}</>;
-}
-
-Tab.displayName = "Tab";
-
-function CostCard({ tokens, usd, breakdown }: CostState) {
-  return (
-    <div className={styles.card}>
-      <h3>Cost</h3>
-      <div className={styles.kpis}>
-        <div>
-          <div className={styles.kpiLabel}>Total tokens</div>
-          <div className={styles.kpiValue}>{Number.isFinite(tokens) ? tokens.toLocaleString() : "0"}</div>
-        </div>
-        <div>
-          <div className={styles.kpiLabel}>Est. USD</div>
-          <div className={styles.kpiValue}>${Number.isFinite(usd) ? usd.toFixed(4) : "0.0000"}</div>
-        </div>
-      </div>
-      <pre className={styles.pre}>{JSON.stringify(breakdown, null, 2)}</pre>
-    </div>
-  );
-}
-
 type ArtifactsProps = {
   finalDraft: string;
   docxPath: string;
   docxRelative: string;
-  running: boolean;
 };
 
-function Artifacts({ finalDraft, docxPath, docxRelative, running }: ArtifactsProps) {
+function Artifacts({ finalDraft, docxPath, docxRelative }: ArtifactsProps) {
   const href = docxRelative ? `/${docxRelative}` : docxPath ? docxPath : "";
+  // Default: open preview if no DOCX yet; collapse when DOCX exists
+  const [showPreview, setShowPreview] = useState<boolean>(() => !href);
+  const userToggledRef = useRef(false);
+  const previewId = useMemo(
+    () => `draft-preview-${Math.random().toString(36).slice(2, 8)}`,
+    []
+  );
+
+  useEffect(() => {
+    // Auto-collapse when a DOCX becomes available unless the user has toggled manually
+    if (href && !userToggledRef.current) {
+      setShowPreview(false);
+    }
+  }, [href]);
+
+  const onTogglePreview = () => {
+    userToggledRef.current = true;
+    setShowPreview((v) => !v);
+  };
+
   return (
     <div className={styles.card}>
-      <h3>Artifacts</h3>
+      <h3 className={styles.centeredHeading}>Draft PIP</h3>
       <div className={styles.artifacts}>
         <div>
-          <div className={styles.kpiLabel}>Approved draft</div>
           {finalDraft ? (
-            <pre className={styles.pre}>{finalDraft.slice(0, 6000)}</pre>
-          ) : (
-            <em>{running ? "Waiting for approval…" : "Will appear when approved."}</em>
-          )}
+            <>
+              <button
+                type="button"
+                className={styles.toggleBtn}
+                aria-expanded={showPreview}
+                aria-controls={previewId}
+                onClick={onTogglePreview}
+              >
+                {showPreview ? "Hide preview" : "Show preview"}
+              </button>
+              {showPreview ? (
+                <pre id={previewId} className={styles.pre}>
+                  {finalDraft.slice(0, 6000)}
+                </pre>
+              ) : null}
+            </>
+          ) : null}
         </div>
         <div>
-          <div className={styles.kpiLabel}>DOCX</div>
           {href ? (
-            <a href={href} download>
-              Download {docxRelative || docxPath}
+            <a
+              href={href}
+              download
+              className={styles.downloadBtn}
+              aria-label={`Download ${docxRelative || docxPath}`}
+              title={`Download ${docxRelative || docxPath}`}
+            >
+              <svg
+                className={styles.downloadIcon}
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" />
+                <path d="M12 11v6" />
+                <path d="M9 14l3 3 3-3" />
+              </svg>
+              <span className={styles.srOnly}>Download {docxRelative || docxPath}</span>
             </a>
-          ) : (
-            <em>{running ? "Export step pending." : "Will appear when exported."}</em>
-          )}
+          ) : null}
           {(docxPath || docxRelative) && !href.startsWith("/") ? (
             <div className={styles.docxPathHint}>{docxPath || docxRelative}</div>
           ) : null}
@@ -645,33 +593,6 @@ function ProgressRing({ percent, label }: { percent: number; label?: string }) {
       <div className={styles.ringInner}>{Number.isFinite(p) ? `${p}%` : "—"}{label ? <div className={styles.ringSub}>{label}</div> : null}</div>
     </div>
   );
-}
-
-function ActivityTimeline({ items }: { items: TimelineItem[] }) {
-  if (!items.length) return <em>No tool activity yet.</em>;
-  return (
-    <div className={styles.timeline}>
-      {items.map((it) => (
-        <div key={it.id} className={`${styles.timelineCard} ${it.status === "running" ? styles.tlRun : it.status === "success" ? styles.tlOk : styles.tlErr}`}>
-          <div className={styles.timelineHeader}>
-            <span className={styles.tlStatus}>{it.status === "running" ? "RUN" : it.status === "success" ? "OK" : "ERR"}</span>
-            <span className={styles.tlName}>{it.name}</span>
-            <span className={styles.tlRight}>{it.durationMs ? `${(it.durationMs/1000).toFixed(1)}s` : it.status === "running" ? "…" : null}</span>
-          </div>
-          <div className={styles.timelineBody}>
-            {it.inputSummary ? <div className={styles.tlLine}><strong>Input</strong> <code className={styles.tlCode}>{truncate(JSON.stringify(it.inputSummary), 140)}</code></div> : null}
-            {it.contentSummary ? <div className={styles.tlLine}><strong>Result</strong> <code className={styles.tlCode}>{truncate(JSON.stringify(it.contentSummary), 140)}</code></div> : null}
-            <div className={styles.tlMeta}>Start {it.startedAt ? new Date(it.startedAt).toLocaleTimeString() : "—"} {it.finishedAt ? `• End ${new Date(it.finishedAt).toLocaleTimeString()}` : ""}</div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function truncate(s: string, n = 140) {
-  if (!s) return s as unknown as string;
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
 function Toasts({ toasts, onClose }: { toasts: Array<{ id: string; text: string; level: string }>; onClose: (id: string) => void }) {

@@ -223,9 +223,9 @@ export const GEMINI_CHUNK_SECONDS = Math.max(10, Number(process.env.GEMINI_CHUNK
  * Gemini 2.5 Pro supports up to ~9.5 hours (34,200 seconds) of audio.
  * This threshold is used only for logging and progress estimation.
  *
- * Default: 3600 seconds (1 hour)
+ * Default: 34,200 seconds (~9.5 hours)
  */
-export const GEMINI_SINGLE_PASS_MAX = Number(process.env.GEMINI_SINGLE_PASS_MAX || 3600);
+export const GEMINI_SINGLE_PASS_MAX = Number(process.env.GEMINI_SINGLE_PASS_MAX || 34200);
 
 /**
  * Concurrency for parallel chunk transcription
