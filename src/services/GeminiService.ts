@@ -50,6 +50,10 @@ export interface GenerateContentParams {
   config?: {
     /** Expected response MIME type */
     responseMimeType?: string;
+    /** Thinking configuration (budget in tokens) */
+    thinkingConfig?: {
+      thinkingBudget: number;
+    };
   };
 }
 
@@ -68,13 +72,37 @@ export interface GenerateContentResult {
 }
 
 /**
+ * Parameters for text generation
+ */
+export interface GenerateTextParams {
+  /** Model identifier (e.g., "gemini-2.5-pro") */
+  model: string;
+  /** User prompt text */
+  prompt: string;
+  /** Optional system instruction */
+  systemInstruction?: string;
+  /** Configuration options */
+  config?: {
+    /** Temperature for randomness (0-2) */
+    temperature?: number;
+    /** Maximum output tokens */
+    maxOutputTokens?: number;
+    /** Thinking configuration (budget in tokens) */
+    thinkingConfig?: {
+      thinkingBudget: number;
+    };
+  };
+}
+
+/**
  * Interface for Gemini service operations
  *
  * This interface allows for easy mocking in tests:
  * ```typescript
  * const mockService: IGeminiService = {
  *   uploadFile: async () => ({ uri: "mock://uri", mimeType: "audio/mp3" }),
- *   generateContent: async () => ({ text: "mock transcript" })
+ *   generateContent: async () => ({ text: "mock transcript" }),
+ *   generateText: async () => ({ text: "mock text", usage: {...} })
  * };
  * ```
  */
@@ -90,13 +118,22 @@ export interface IGeminiService {
   uploadFile(file: GeminiUploadSource, mimeType: string): Promise<UploadedFile>;
 
   /**
-   * Generate content using Gemini model
+   * Generate content using Gemini model (for multimodal tasks like transcription)
    *
    * @param params - Content generation parameters
    * @returns Generated content result
    * @throws Error if generation fails
    */
   generateContent(params: GenerateContentParams): Promise<GenerateContentResult>;
+
+  /**
+   * Generate text using Gemini model (for text-to-text tasks like PIP drafting)
+   *
+   * @param params - Text generation parameters
+   * @returns Generated text and usage metrics
+   * @throws Error if generation fails
+   */
+  generateText(params: GenerateTextParams): Promise<{ text: string; usage?: Record<string, unknown> }>;
 }
 
 /**
@@ -206,6 +243,54 @@ export class GeminiService implements IGeminiService {
       text,
       response,
       usageMetadata: extractUsageMetadata(result)
+    };
+  }
+
+  /**
+   * Generate text using Gemini model (for text-to-text tasks)
+   *
+   * @param params - Text generation parameters
+   * @returns Generated text and usage metrics
+   */
+  async generateText(params: GenerateTextParams): Promise<{ text: string; usage?: Record<string, unknown> }> {
+    const ai = await this.ensureClient();
+
+    const requestConfig: any = {
+      model: params.model,
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: params.prompt }]
+        }
+      ],
+      config: params.config || {}
+    };
+
+    // Add system instruction if provided
+    if (params.systemInstruction) {
+      requestConfig.systemInstruction = params.systemInstruction;
+    }
+
+    const result = await ai.models.generateContent(requestConfig);
+
+    const rawResult = result as Record<string, unknown>;
+    let text = typeof rawResult.text === "string" ? rawResult.text : undefined;
+
+    // Try to extract text from response object if not directly available
+    if (!text) {
+      const rawResponse = rawResult.response;
+      if (rawResponse && typeof rawResponse === "object" && typeof (rawResponse as any).text === "function") {
+        text = (rawResponse as { text: () => string }).text();
+      }
+    }
+
+    if (!text) {
+      throw new Error("Failed to extract text from Gemini response");
+    }
+
+    return {
+      text: text.trim(),
+      usage: extractUsageMetadata(result)
     };
   }
 }

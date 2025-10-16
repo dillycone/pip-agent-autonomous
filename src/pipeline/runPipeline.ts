@@ -8,7 +8,8 @@ import { makePolicyJudgeAgent } from "../agents/policyJudge.js";
 import {
   MODELS,
   MAX_TURNS,
-  MAX_REVIEW_ROUNDS
+  MAX_REVIEW_ROUNDS,
+  PIP_DRAFT_MODEL
 } from "../config.js";
 import {
   isStreamEvent,
@@ -17,6 +18,8 @@ import {
 } from "../types/index.js";
 import { sanitizeError, sanitizePath } from "../utils/sanitize.js";
 import { TokenCostTracker } from "../utils/costTracker.js";
+import { extractToolUsage } from "../utils/toolUsage.js";
+import { extractModelFamily, withModelFamilyInDocxPath } from "../utils/modelFamily.js";
 import type { RunStatus } from "../server/runStore.js";
 
 const MCP_SERVERS = {
@@ -158,6 +161,69 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
   const emit = handlers.emit;
   let currentRunStatus: RunStatus = "pending";
   let lastError: unknown;
+  let pipDraftModel: string | null = PIP_DRAFT_MODEL || null;
+  let pipModelFamily: string | null = pipDraftModel ? extractModelFamily(pipDraftModel) : null;
+
+  const updateDraftModel = (candidate: unknown) => {
+    if (typeof candidate !== "string") {
+      return;
+    }
+    const trimmed = candidate.trim();
+    if (!trimmed || trimmed === pipDraftModel) {
+      return;
+    }
+    pipDraftModel = trimmed;
+    const family = extractModelFamily(trimmed);
+    pipModelFamily = family;
+  };
+
+  const ensureDocxPathHasModel = (docxPath: string): string => {
+    if (!pipModelFamily) {
+      return docxPath;
+    }
+    const desiredPath = withModelFamilyInDocxPath(docxPath, pipModelFamily);
+    const resolvedSource = path.resolve(docxPath);
+    const resolvedTarget = path.resolve(desiredPath);
+    if (resolvedSource === resolvedTarget) {
+      return resolvedTarget;
+    }
+    try {
+      if (!fs.existsSync(resolvedSource)) {
+        emit("log", {
+          level: "warn",
+          message: `Expected DOCX not found for renaming: ${sanitizePath(resolvedSource)}`
+        });
+        return docxPath;
+      }
+      const targetDir = path.dirname(resolvedTarget);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      let candidateTarget = resolvedTarget;
+      if (fs.existsSync(candidateTarget)) {
+        const parsedCandidate = path.parse(candidateTarget);
+        candidateTarget = path.join(
+          parsedCandidate.dir,
+          `${parsedCandidate.name}-${Date.now()}${parsedCandidate.ext}`
+        );
+      }
+      fs.renameSync(resolvedSource, candidateTarget);
+      emit("log", {
+        level: "info",
+        message: `Renamed DOCX to include model (${pipModelFamily}): ${sanitizePath(candidateTarget)}`
+      });
+      return candidateTarget;
+    } catch (renameError) {
+      const renameDetails = sanitizeError(renameError);
+      emit("log", {
+        level: "warn",
+        message: `Failed to rename DOCX with model: ${
+          typeof renameDetails.message === "string" ? renameDetails.message : "unknown error"
+        }`
+      });
+      return docxPath;
+    }
+  };
 
   const setRunStatus = (status: RunStatus, error?: unknown) => {
     currentRunStatus = status;
@@ -298,6 +364,14 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
               } else if (toolUse.name.includes("pip-generator")) {
                 sendStatus("transcribe", "success");
                 sendStatus("draft", "running");
+                if (
+                  toolUse.input &&
+                  typeof toolUse.input === "object" &&
+                  !Array.isArray(toolUse.input)
+                ) {
+                  const maybeModel = (toolUse.input as { model?: unknown }).model;
+                  updateDraftModel(maybeModel);
+                }
               } else if (toolUse.name.includes("docx-exporter")) {
                 sendStatus("draft", "success");
                 sendStatus("review", "success");
@@ -367,6 +441,38 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
           }
 
           const payload = resultData.content;
+          if (!resultData.isError) {
+            const usage = extractToolUsage(payload);
+            if (usage) {
+              const provider = usage.provider?.toLowerCase();
+              const isGeminiTool = name?.includes("gemini-transcriber") || provider === "gemini";
+              if (isGeminiTool) {
+                if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                  costTracker.recordTotals({
+                    geminiInputTokens: usage.inputTokens,
+                    geminiOutputTokens: usage.outputTokens
+                  });
+                  pushCost();
+                }
+              } else {
+                if (
+                  usage.inputTokens > 0 ||
+                  usage.outputTokens > 0 ||
+                  usage.cacheCreationTokens > 0 ||
+                  usage.cacheReadTokens > 0
+                ) {
+                  costTracker.recordTotals({
+                    inputTokens: usage.inputTokens,
+                    outputTokens: usage.outputTokens,
+                    cacheCreationTokens: usage.cacheCreationTokens,
+                    cacheReadTokens: usage.cacheReadTokens
+                  });
+                  pushCost();
+                }
+              }
+            }
+          }
+
           const textPart = Array.isArray(payload)
             ? payload.find((item) => typeof item?.text === "string")?.text
             : typeof payload === "string"
@@ -382,7 +488,23 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
                 startChunk?: number;
                 nextChunk?: number | null;
                 segments?: Array<{ text?: unknown }>;
+                model?: unknown;
+                usage?: unknown;
               };
+              if (name?.includes("pip-generator")) {
+                const directModel =
+                  typeof parsed.model === "string" ? parsed.model : undefined;
+                if (directModel) {
+                  updateDraftModel(directModel);
+                } else if (
+                  parsed.usage &&
+                  typeof parsed.usage === "object" &&
+                  !Array.isArray(parsed.usage)
+                ) {
+                  const usageModel = (parsed.usage as { model?: unknown }).model;
+                  updateDraftModel(usageModel);
+                }
+              }
               if (typeof parsed.totalChunks === "number" && parsed.totalChunks > 0) {
                 transcribeTotal = Math.max(transcribeTotal ?? 0, parsed.totalChunks);
               }
@@ -535,17 +657,18 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
           ) {
             const draft = (payload as { draft?: string }).draft ?? "";
             const docxRaw = (payload as { docx?: string }).docx ?? outputPath;
-            const docxRelative = sanitizePath(path.relative(projectRoot, docxRaw));
+            const finalDocxPath = ensureDocxPathHasModel(docxRaw);
+            const docxRelative = sanitizePath(path.relative(projectRoot, finalDocxPath));
             sendStatus("export", "success");
-          emit("final", {
-            ok: true,
-            draft,
-            docx: sanitizePath(docxRaw),
-            docxRelative,
-            at: new Date().toISOString()
-          });
-          hasFinalEvent = true;
-          setRunStatus("success");
+            emit("final", {
+              ok: true,
+              draft,
+              docx: sanitizePath(finalDocxPath),
+              docxRelative,
+              at: new Date().toISOString()
+            });
+            hasFinalEvent = true;
+            setRunStatus("success");
           } else {
             const sanitizedPayload = sanitizeError(payload ?? rawResult);
             emit("error", {
@@ -571,10 +694,11 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
         if (stats.size > 1000) {
           emit("log", { level: "info", message: "Output file was created successfully despite worker error" });
           sendStatus("export", "success");
-          const docxRelative = sanitizePath(path.relative(projectRoot, outputPath));
+          const finalDocxPath = ensureDocxPathHasModel(outputPath);
+          const docxRelative = sanitizePath(path.relative(projectRoot, finalDocxPath));
           emit("final", {
             ok: true,
-            docx: sanitizePath(outputPath),
+            docx: sanitizePath(finalDocxPath),
             docxRelative,
             recovered: true
           });

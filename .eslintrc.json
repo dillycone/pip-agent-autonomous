@@ -3,7 +3,12 @@
   "parserOptions": {
     "ecmaVersion": 2022,
     "sourceType": "module",
-    "project": "./tsconfig.json"
+    "project": [
+      "./tsconfig.json",
+      "./tsconfig.tests.json",
+      "./tsconfig.scripts.json",
+      "./apps/ui/tsconfig.json"
+    ]
   },
   "extends": [
     "eslint:recommended",

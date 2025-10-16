@@ -37,6 +37,11 @@ export interface MessageParams {
   systemPrompt: string;
   /** User prompt with the actual request */
   userPrompt: string;
+  /** Optional extended thinking configuration */
+  thinking?: {
+    type: "enabled";
+    budget_tokens: number;
+  };
 }
 
 /**
@@ -88,7 +93,7 @@ export class AnthropicService implements IAnthropicService {
    * @throws Error if the API call fails or returns empty content
    */
   async generateMessage(params: MessageParams): Promise<{ text: string; usage?: UsageMetrics }> {
-    const response = await this.client.messages.create({
+    const requestParams: any = {
       model: params.model,
       max_tokens: params.maxTokens,
       temperature: params.temperature,
@@ -99,9 +104,17 @@ export class AnthropicService implements IAnthropicService {
           content: params.userPrompt
         }
       ]
-    });
+    };
+
+    // Add extended thinking if specified
+    if (params.thinking) {
+      requestParams.thinking = params.thinking;
+    }
+
+    const response = await this.client.messages.create(requestParams);
 
     // Extract and join all text blocks from the response
+    // Note: Thinking tokens are automatically counted in usage.output_tokens
     const text = response.content
       .filter((block): block is TextBlock => block.type === "text")
       .map(block => block.text)

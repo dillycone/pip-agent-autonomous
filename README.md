@@ -1,15 +1,19 @@
-# PIP Agent (Gemini 2.5 Pro + Claude Sonnet 4.5) — Autonomous
+# PIP Agent (Multi-Model with Extended Thinking) — Autonomous
 
 **What it does**
-1) Transcribes your HRBP–Manager audio using **Gemini‑2.5‑pro** (with input/output language control).  
-2) Drafts a PIP using **your prompt** (provided in `prompts/draft-pip.txt`).  
-3) Reviews the draft with a **Claude Sonnet 4.5** judge against your guardrails.  
+1) Transcribes your HRBP–Manager audio using **Gemini‑2.5‑pro** (with input/output language control, minimal thinking budget for cost efficiency).
+2) Drafts a PIP using **your choice of model** with **extended thinking** for deep reasoning about HR policy, legal compliance, and tone.
+3) Reviews the draft with a **Claude Sonnet 4.5** judge against your guardrails.
 4) Exports an approved draft to **.docx** (uses a template if provided; otherwise generates a clean fallback .docx).
 
 **Models**
 - Agent SDK model: `claude-sonnet-4-5-20250929`
 - Judge model (subagent): `claude-sonnet-4-5-20250929`
-- Transcription model: `gemini-2.5-pro`
+- Transcription model: `gemini-2.5-pro` (minimal thinking: 128 tokens)
+- **PIP Draft model (configurable)**:
+  - `claude-sonnet-4-5-20250929` (default, best quality, thinking budget: 64k tokens)
+  - `claude-haiku-4-5-20251001` (faster, lower cost, thinking budget: 64k tokens)
+  - `gemini-2.5-pro` (alternative, thinking budget: 16k tokens)
 
 ## Quick start
 
@@ -56,21 +60,65 @@ Example without a template (fallback export):
 npm run dev -- --audio /absolute/path/to/meeting.mp3 --outdoc exports/PIP.docx
 ```
 
+## Model Selection & Extended Thinking
+
+The pipeline now supports **three models** for PIP draft generation, all with **extended thinking** for deep reasoning:
+
+### Model Options
+
+Configure via `PIP_DRAFT_MODEL` in `.env`:
+
+| Model | Speed | Cost | Thinking Budget | Best For |
+|-------|-------|------|----------------|----------|
+| `claude-sonnet-4-5-20250929` | Medium | $3/$15/MTK | 64,000 tokens | **Highest quality** (default) |
+| `claude-haiku-4-5-20251001` | Fast | $1/$5/MTK | 64,000 tokens | **Speed & cost balance** |
+| `gemini-2.5-pro` | Medium | $1.25/$10/MTK* | 16,384 tokens | **Alternative reasoning** |
+
+*Gemini: $1.25/$10/MTK for ≤200k tokens, $2.50/$15/MTK for >200k tokens
+
+### Extended Thinking
+
+All models use **extended thinking** during PIP generation for deeper reasoning about:
+- HR policy compliance
+- Legal tone and specificity
+- Measurable goals and timelines
+- Non-discriminatory language
+
+**Thinking Budget Configuration** (`PIP_THINKING_BUDGET` in `.env`):
+- **Claude models**: 1,024-128,000 tokens (default: 64,000)
+- **Gemini**: 128-32,768 tokens (default: 16,384)
+- Higher budgets = better reasoning but higher cost
+- Thinking tokens are billed as output tokens
+
+**Note**: Transcription uses **minimal thinking** (128 tokens) since it's a straightforward task where thinking provides no benefit.
+
+### Cost Comparison Example
+
+For a 5,000-word transcript generating a 2,000-word PIP with 64k thinking budget:
+
+| Model | Input Cost | Output Cost | Thinking Cost | Total |
+|-------|-----------|-------------|---------------|-------|
+| Sonnet 4.5 | ~$0.02 | ~$0.03 | ~$0.96 | **~$1.01** |
+| Haiku 4.5 | ~$0.01 | ~$0.01 | ~$0.32 | **~$0.34** |
+| Gemini (16k) | ~$0.01 | ~$0.02 | ~$0.16 | **~$0.19** |
+
 ## ASCII flow
 
 ```
 [User]
-   └─ audio + languages (in/out) + keys in .env
+   └─ audio + languages (in/out) + model selection + keys in .env
         ▼
-[Gemini 2.5 Pro Transcriber  (MCP tool)]
+[Gemini 2.5 Pro Transcriber  (MCP tool, minimal thinking: 128 tokens)]
    ├─ Attempt single-pass transcription first (up to 9.5 hours supported)
    ├─ On timeout/too-large: automatic fallback to chunked transcription
    └─ transcript (outLang), segments[]
         ▼
 [Claude Agent SDK  (claude-sonnet-4-5-20250929)]
    ├─ Apply YOUR prompt (prompts/draft-pip.txt) to transcript → Draft
-   ├─ Subagent: policy-judge (same model)
-   │    └─ approves? yes → go on; no → suggest fixes → self-revise → re-judge (≤ 2)
+   │    └─ Model: Claude Sonnet 4.5 / Haiku 4.5 / Gemini 2.5 Pro
+   │    └─ Extended Thinking: 16k-64k tokens (deep reasoning)
+   ├─ Subagent: policy-judge (Claude Sonnet 4.5)
+   │    └─ approves? yes → go on; no → suggest fixes → self-revise → re-judge (≤1)
    └─ Exporter (MCP tool): render to DOCX (template or fallback)
         ▼
 [Output]

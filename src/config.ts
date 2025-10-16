@@ -109,6 +109,56 @@ export const PIP_MAX_OUTPUT_TOKENS = Number.isFinite(Number(process.env.PIP_MAX_
   ? Number(process.env.PIP_MAX_OUTPUT_TOKENS)
   : 4096;
 
+/**
+ * Model to use for PIP draft generation
+ * Supports: "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "gemini-2.5-pro"
+ * Default: claude-sonnet-4-5-20250929
+ */
+export const PIP_DRAFT_MODEL = process.env.PIP_DRAFT_MODEL || "claude-sonnet-4-5-20250929";
+
+/**
+ * Thinking budget for PIP generation (tokens)
+ *
+ * PIP generation requires deep reasoning about HR policy, legal compliance,
+ * tone, and specificity. We use HIGH thinking budgets for maximum quality.
+ *
+ * Valid ranges by model:
+ * - Claude Sonnet/Haiku: 1024-128000 tokens
+ * - Gemini 2.5 Pro: 128-32768 tokens
+ *
+ * Default: 64000 for Claude, 16384 for Gemini (high budgets for quality)
+ * Set to 0 to disable thinking (not recommended for PIP generation)
+ */
+export const PIP_THINKING_BUDGET = (() => {
+  const envValue = process.env.PIP_THINKING_BUDGET;
+  if (envValue !== undefined && envValue !== "") {
+    const parsed = Number(envValue);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  // Auto-select default based on model
+  if (PIP_DRAFT_MODEL.includes("gemini")) {
+    return 16384; // High budget for Gemini (within 128-32768 range)
+  }
+  return 64000; // High budget for Claude (within 1024-128000 range)
+})();
+
+/**
+ * Validate and clamp thinking budget to model-specific ranges
+ */
+export function getValidatedThinkingBudget(model: string, budget: number): number {
+  if (budget === 0) return 0; // Allow disabling thinking if explicitly set to 0
+
+  if (model.includes("gemini")) {
+    // Gemini 2.5 Pro: 128-32768 tokens
+    return Math.max(128, Math.min(32768, budget));
+  } else {
+    // Claude models: 1024-128000 tokens
+    return Math.max(1024, Math.min(128000, budget));
+  }
+}
+
 // ============================================================================
 // Pipeline Configuration
 // ============================================================================
@@ -189,6 +239,18 @@ export const GEMINI_TRANSCRIBE_CONCURRENCY = Math.max(1, Number(process.env.GEMI
  * Default: 2 (minimum 0)
  */
 export const GEMINI_TRANSCRIBE_RETRIES = Math.max(0, Number(process.env.GEMINI_TRANSCRIBE_RETRIES || 2));
+
+/**
+ * Thinking budget for Gemini transcription (tokens)
+ *
+ * Gemini 2.5 Pro cannot fully disable thinking (minimum 128 tokens).
+ * For transcription (a straightforward task), we use the minimum to reduce costs.
+ * Thinking provides no benefit for audio-to-text conversion.
+ *
+ * Valid range: 128-32768 tokens
+ * Default: 128 (minimum to minimize unnecessary reasoning costs)
+ */
+export const GEMINI_TRANSCRIBE_THINKING_BUDGET = Math.max(128, Math.min(32768, Number(process.env.GEMINI_TRANSCRIBE_THINKING_BUDGET || 128)));
 
 // ============================================================================
 // S3 + Presigned URL Configuration
@@ -334,15 +396,18 @@ export const PRICING = {
 
   /**
    * Gemini 2.5 Pro transcription input cost per MTK (≤200k tokens per request)
-   * $1.25 per MTK as of October 2025
+   * $1.25 per MTK as of January 2025
+   * NOTE: For >200k tokens, pricing is $2.50/MTK input and $15/MTK output
    */
   GEMINI_TRANSCRIBE_INPUT_PER_MTK: 1.25,
 
   /**
    * Gemini 2.5 Pro transcription output cost per MTK (≤200k tokens per request)
-   * $5.00 per MTK as of October 2025
+   * $10.00 per MTK as of January 2025
+   * NOTE: For >200k tokens, pricing is $15/MTK output
+   * NOTE: Thinking tokens are billed as output tokens at this rate
    */
-  GEMINI_TRANSCRIBE_OUTPUT_PER_MTK: 5.0
+  GEMINI_TRANSCRIBE_OUTPUT_PER_MTK: 10.0
 } as const;
 
 // ============================================================================
@@ -466,8 +531,10 @@ export function getConfigSummary() {
       retries: GEMINI_TRANSCRIBE_RETRIES
     },
     pipGeneration: {
+      model: PIP_DRAFT_MODEL,
       temperature: PIP_TEMPERATURE,
       maxOutputTokens: PIP_MAX_OUTPUT_TOKENS,
+      thinkingBudget: PIP_THINKING_BUDGET,
       promptPath: PIP_PROMPT_PATH
     },
     paths: {
