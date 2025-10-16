@@ -602,25 +602,45 @@ function Artifacts({ finalDraft, docxPath, docxRelative, running }: ArtifactsPro
   const href = docxRelative ? `/${docxRelative}` : docxPath ? docxPath : "";
   return (
     <div className={styles.card}>
-      <h3>Artifacts</h3>
+      <h3 className={styles.cardTitleCentered}>Draft PIP</h3>
       <div className={styles.artifacts}>
         <div>
-          <div className={styles.kpiLabel}>Approved draft</div>
           {finalDraft ? (
             <pre className={styles.pre}>{finalDraft.slice(0, 6000)}</pre>
-          ) : (
-            <em>{running ? "Waiting for approval…" : "Will appear when approved."}</em>
-          )}
+          ) : running ? (
+            <em className={styles.artifactStatus}>Waiting for approval…</em>
+          ) : null}
         </div>
-        <div>
-          <div className={styles.kpiLabel}>DOCX</div>
+        <div className={styles.docxSection}>
           {href ? (
-            <a href={href} download>
-              Download {docxRelative || docxPath}
+            <a className={styles.docxLink} href={href} download>
+              <svg
+                className={styles.docxIcon}
+                viewBox="0 0 64 64"
+                role="img"
+                aria-label="Download DOCX"
+              >
+                <path
+                  d="M20 6c-2.2 0-4 1.8-4 4v44c0 2.2 1.8 4 4 4h24c2.2 0 4-1.8 4-4V22L36 6H20z"
+                  fill="#e2e8f0"
+                />
+                <path d="M36 6v14h12L36 6z" fill="#cbd5f5" />
+                <path
+                  d="M22 32h20M22 40h20M22 48h20"
+                  stroke="#1d4ed8"
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M32 54l8-10H24l8 10z"
+                  fill="#1d4ed8"
+                />
+              </svg>
+              <span className={styles.srOnly}>Download {docxRelative || docxPath}</span>
             </a>
-          ) : (
-            <em>{running ? "Export step pending." : "Will appear when exported."}</em>
-          )}
+          ) : running ? (
+            <em className={styles.artifactStatus}>Export step pending…</em>
+          ) : null}
           {(docxPath || docxRelative) && !href.startsWith("/") ? (
             <div className={styles.docxPathHint}>{docxPath || docxRelative}</div>
           ) : null}
