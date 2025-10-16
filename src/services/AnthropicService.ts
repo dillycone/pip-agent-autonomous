@@ -121,6 +121,10 @@ export class AnthropicService implements IAnthropicService {
       .join("")
       .trim();
 
+    if (!text) {
+      throw new Error("Anthropic returned empty content");
+    }
+
     return { text, usage: response.usage as UsageMetrics | undefined };
   }
 }
