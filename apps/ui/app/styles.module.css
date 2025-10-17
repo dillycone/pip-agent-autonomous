@@ -2,7 +2,8 @@
   max-width: 1200px;
   margin: 0 auto;
   padding: 24px;
-  color: #0b1221;
+  color: var(--text);
+  background: var(--bg);
 }
 
 .header {
@@ -19,7 +20,7 @@
 
 .sub {
   margin: 0 0 16px;
-  color: #5b6478;
+  color: var(--text-secondary);
 }
 
 .formRow {
@@ -32,16 +33,29 @@
 
 .formRow label {
   font-size: 12px;
-  color: #334155;
+  color: var(--text-muted);
   text-align: right;
 }
 
 .formRow input {
   padding: 8px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
-  background: #ffffff;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.inputField {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inputHint {
+  font-size: 11px;
+  color: #6b7280;
+  font-weight: 400;
 }
 
 .runBtn {
@@ -73,8 +87,8 @@
 }
 
 .stepper {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
 }
@@ -115,7 +129,7 @@
   padding: 8px;
   border-radius: 10px;
   border: 1px solid transparent;
-  background: #ffffff;
+  background: var(--surface);
   text-align: left;
   cursor: pointer;
   font: inherit;
@@ -124,7 +138,7 @@
 }
 
 .step:hover {
-  background: #f8fafc;
+  background: var(--surface-light);
 }
 
 .step:focus-visible {
@@ -291,8 +305,8 @@
 }
 
 .card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
   display: flex;
@@ -311,13 +325,23 @@
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: #0b1221;
+  color: var(--text);
 }
 
 .cardSub {
   margin: 0 0 4px;
   font-size: 13px;
-  color: #475569;
+  color: var(--text-muted);
+}
+
+.errorGuidance {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #991b1b;
+  background: #fee2e2;
+  border-left: 3px solid #ef4444;
+  padding: 8px;
+  border-radius: 4px;
 }
 
 .cardBody {
@@ -400,7 +424,7 @@
 
 .kpiLabel {
   font-size: 12px;
-  color: #475569;
+  color: var(--text-muted);
 }
 
 .kpiValue {
@@ -665,6 +689,175 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* StatusDashboard Component */
+.statusDashboard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.errorBanner {
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.errorContent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #991b1b;
+  font-weight: 500;
+}
+
+.errorIcon {
+  font-size: 16px;
+}
+
+.statusContent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.statusLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.progressRingWrapper {
+  flex-shrink: 0;
+}
+
+.statusInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statusLabel {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.currentStep {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0b1221;
+}
+
+.elapsedTime {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.statusPills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Individual status pill styling */
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.statusPill.statusSuccess {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.statusPill.statusError {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.statusPill.statusRunning {
+  background: #cffafe;
+  color: #0f766e;
+}
+
+.statusPill.statusPending {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.pillDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.pillLabel {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.statusActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.actionBtn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #0b1221;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.actionBtn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.actionBtnRetry {
+  background: #ecfdf5;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.actionBtnRetry:hover {
+  background: #dcfce7;
+  border-color: #6ee7b7;
 }
 
 @media (max-width: 960px) {

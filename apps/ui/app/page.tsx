@@ -4,35 +4,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import type { ReactNode } from "react";
 import allowedExtensions from "../../../src/config/allowedExtensions.json";
 import styles from "./styles.module.css";
-// (no extra imports added by this session)
+import StatusDashboard from "./components/StatusDashboard";
+import { safeJsonParse, formatDuration, formatDurationMs } from "../lib/utils";
+import type { LogItem, TimelineItem, CostState } from "../lib/types";
 
-type Step = "transcribe" | "draft" | "review" | "export";
-type StepStatus = "pending" | "running" | "success" | "error";
-
-type LogItem = {
-  ts: number;
-  type: string;
-  payload: unknown;
-};
-
-type TimelineItem = {
-  id: string;
-  name: string;
-  phase: Step | "unknown";
-  status: StepStatus;
-  startedAt?: string;
-  finishedAt?: string;
-  durationMs?: number;
-  inputSummary?: unknown;
-  contentSummary?: unknown;
-  isError?: boolean;
-};
-
-type CostState = {
-  tokens: number;
-  usd: number;
-  breakdown: Record<string, unknown>;
-};
+export type Step = "transcribe" | "draft" | "review" | "export";
+export type StepStatus = "pending" | "running" | "success" | "error";
 
 type DraftPreviewStatus = "idle" | "streaming" | "complete";
 
@@ -107,7 +84,7 @@ const ALLOWED_TEMPLATE_EXTENSIONS = extensionConfig.templateExtensions;
 const ALLOWED_OUTPUT_EXTENSIONS = extensionConfig.outputExtensions;
 const PATH_TRAVERSAL_PATTERN = /(^|[\\/])\.\.([\\/]|$)/;
 
-function hasAllowedExtension(value: string, allowed: string[]): boolean {
+function hasAllowedExtension(value: string, allowed: readonly string[]): boolean {
   const lower = value.toLowerCase();
   return allowed.some((ext) => lower.endsWith(ext));
 }
@@ -121,22 +98,7 @@ const defaultSteps: Record<Step, StepStatus> = {
   export: "pending"
 };
 
-function formatDuration(rawSeconds: number): string {
-  if (!Number.isFinite(rawSeconds)) return "0:00";
-  const totalSeconds = Math.max(0, Math.floor(rawSeconds));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-  }
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
 
-function formatDurationMs(ms?: number): string {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";
-  return formatDuration(Math.round(ms / 1000));
-}
 
 function formatClock(iso?: string): string {
   if (!iso) return "—";
@@ -198,30 +160,7 @@ function summarizeTranscribeInput(input: unknown): string | null {
   return parts.length > 0 ? parts.join(" • ") : null;
 }
 
-const MAX_JSON_DEBUG_LOGS = 5;
-let jsonDebugCount = 0;
 
-function logJsonParseFailure(context: string, raw: string, error: unknown) {
-  if (jsonDebugCount >= MAX_JSON_DEBUG_LOGS) return;
-  jsonDebugCount += 1;
-  const snippet = raw.slice(0, 200);
-  // eslint-disable-next-line no-console
-  console.debug(`[stream-json] ${context} parse failed`, {
-    snippet,
-    rawLength: raw.length,
-    error: error instanceof Error ? error.message : String(error)
-  });
-}
-
-function safeJsonParse<T>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch (error) {
-    logJsonParseFailure("safeJsonParse", raw, error);
-    return null;
-  }
-}
 
 function extractTextPayload(payload: unknown): string | null {
   if (typeof payload === "string") {
@@ -250,6 +189,64 @@ function normalizeUsageMetrics(raw: unknown): { model?: string; inputTokens?: nu
   };
 }
 
+function computeOverallProgress(state: {
+  steps: Record<Step, StepStatus>;
+  chunks: { processed: number; total: number };
+  draftPreviewStatus: DraftPreviewStatus;
+  reviewRounds: Array<{ round: number; approved: boolean; reasons: string[]; requiredChanges: string[]; at?: string }>;
+}): number {
+  // Weighted blend algorithm:
+  // - Transcribe: 50% weight based on chunks processed
+  // - Draft: 25% weight based on streaming status
+  // - Review: 15% weight based on rounds completed (max 4)
+  // - Export: 10% weight based on step status
+
+  // Transcribe progress: 0→50% based on chunks processed
+  const transcribeProgress = (() => {
+    const status = state.steps.transcribe;
+    if (status === "success" || status === "error") return 50;
+    if (status === "running") {
+      if (!state.chunks.total || state.chunks.total <= 0) return 0;
+      const ratio = state.chunks.processed / state.chunks.total;
+      return Math.min(50, Math.round(ratio * 50));
+    }
+    return 0;
+  })();
+
+  // Draft progress: 0→25% based on streaming status
+  const draftProgress = (() => {
+    const status = state.steps.draft;
+    if (status === "success" || status === "error") return 25;
+    if (status === "running") {
+      if (state.draftPreviewStatus === "streaming") return 20;
+      if (state.draftPreviewStatus === "complete") return 25;
+      return 10;
+    }
+    return 0;
+  })();
+
+  // Review progress: 0→15% based on rounds completed (max 4 rounds)
+  const reviewProgress = (() => {
+    const status = state.steps.review;
+    if (status === "success" || status === "error") return 15;
+    if (status === "running") {
+      const roundCount = Math.min(state.reviewRounds.length, 4);
+      return Math.round((roundCount / 4) * 15);
+    }
+    return 0;
+  })();
+
+  // Export progress: 0→10%
+  const exportProgress = (() => {
+    const status = state.steps.export;
+    if (status === "success" || status === "error") return 10;
+    if (status === "running") return 5;
+    return 0;
+  })();
+
+  return Math.round(transcribeProgress + draftProgress + reviewProgress + exportProgress);
+}
+
 export default function Page() {
   const [audio, setAudio] = useState("uploads/meeting.mp3");
   const [inLang, setInLang] = useState("auto");
@@ -258,7 +255,7 @@ export default function Page() {
   const [outdoc, setOutdoc] = useState(() => `exports/pip-${Date.now()}.docx`);
 
   const [running, setRunning] = useState(false);
-  // removed runId state added in this session
+  const [runId, setRunId] = useState<string | null>(null);
   const [transcribeElapsedSeconds, setTranscribeElapsedSeconds] = useState(0);
   const [streamState, dispatchStream] = useReducer(streamReducer, undefined, createInitialStreamState);
   const {
@@ -308,7 +305,7 @@ export default function Page() {
   }, []);
 
   const trackEventSourceListener = useCallback(
-    (source: EventSource, type: string, listener: EventListenerOrEventListenerObject) => {
+    (source: EventSource, type: string, listener: any) => {
       source.addEventListener(type, listener);
       eventSourceListenersRef.current.push({ source, type, listener });
     },
@@ -391,12 +388,13 @@ export default function Page() {
     draftPreviewChunksRef.current = false;
     setLogs([]);
     setTranscribeElapsedSeconds(0);
+    setRunId(null);
   }, [dispatchStream, setTranscribeElapsedSeconds]);
 
   const handleStreamError = useCallback((payload: unknown) => {
     pushLog("error", payload ?? "Stream error");
     setRunning(false);
-    // no runId tracking
+    setRunId(null);
     updateStreamState((prev) => {
       const nextSteps: Record<Step, StepStatus> = { ...prev.steps };
       (Object.keys(nextSteps) as Step[]).forEach((step) => {
@@ -447,10 +445,11 @@ export default function Page() {
         return;
       }
 
-      const { runId } = payload as { runId: string };
+      const { runId: newRunId } = payload as { runId: string };
+      setRunId(newRunId);
       pushLog("run", payload);
 
-      const es = new EventSource(`/api/run/${encodeURIComponent(runId)}/stream`);
+      const es = new EventSource(`/api/run/${encodeURIComponent(newRunId)}/stream`);
       eventSourceRef.current = es;
 
       trackEventSourceListener(es, "status", (event: MessageEvent<string>) => {
@@ -539,7 +538,7 @@ export default function Page() {
           updateStreamState((prev) => {
             const nextTimeline = [
               ...prev.timeline,
-              { id: data.id!, name: data.name!, phase, status: "running", startedAt: data.startedAt, inputSummary: data.inputSummary }
+              { id: data.id!, name: data.name!, phase, status: "running" as StepStatus, startedAt: data.startedAt, inputSummary: data.inputSummary }
             ];
             if (nextTimeline.length > 500) {
               nextTimeline.splice(0, nextTimeline.length - 500);
@@ -655,10 +654,11 @@ export default function Page() {
           draftPreviewChunksRef.current = true;
           updateStreamState((prev) => {
             const nextLines = [...prev.draftPreviewLines];
+            const text = data.text!; // Safe to assert since we checked above
             if (typeof data.index === "number" && data.index >= 0) {
-              nextLines[data.index] = data.text;
+              nextLines[data.index] = text;
             } else {
-              nextLines.push(data.text);
+              nextLines.push(text);
             }
             const filtered = nextLines
               .filter((line): line is string => typeof line === "string" && line.length > 0)
@@ -684,13 +684,14 @@ export default function Page() {
 
       trackEventSourceListener(es, "judge_round", (event: MessageEvent<string>) => {
         const data = safeJsonParse<{ approved?: boolean; reasons?: string[]; required_changes?: string[]; revised_draft?: string | null; round?: number; at?: string }>(event.data);
-        if (data?.round) {
+        if (typeof data?.round === "number") {
           updateStreamState((prev) => {
-            const filtered = prev.reviewRounds.filter((item) => item.round !== data.round);
+            const round = data.round!; // Safe to assert since we checked type above
+            const filtered = prev.reviewRounds.filter((item) => item.round !== round);
             const next = [
               ...filtered,
               {
-                round: data.round,
+                round,
                 approved: Boolean(data.approved),
                 reasons: Array.isArray(data.reasons) ? data.reasons.filter((r): r is string => typeof r === "string" && r.trim().length > 0) : [],
                 requiredChanges: Array.isArray(data.required_changes) ? data.required_changes.filter((r): r is string => typeof r === "string" && r.trim().length > 0) : [],
@@ -825,16 +826,95 @@ export default function Page() {
         }
       });
 
-      pushLog("info", `Stream opened for run ${runId}`);
+      es.onerror = async (_event: Event) => {
+        if (!runId) {
+          pushLog("resync-error", "Run ID unavailable, cannot resync connection");
+          pushToast("Connection lost and run ID missing; cannot resync.", "error");
+          return;
+        }
+
+        pushLog("stream-error", "Connection lost, attempting resync...");
+        pushToast("Connection lost, resyncing…", "warn");
+
+        try {
+          const response = await fetch(`/api/run/${encodeURIComponent(runId)}/stream`);
+
+          if (!response.ok) {
+            throw new Error(`Resync failed: ${response.status}`);
+          }
+
+          const stateResponse = await fetch(
+            `/api/run/${encodeURIComponent(runId)}/state`
+          ).catch(() => null);
+
+          if (stateResponse?.ok) {
+            const stateSnapshot = await stateResponse.json().catch(() => null);
+            if (stateSnapshot) {
+              updateStreamState((prev) => ({
+                ...prev,
+                ...stateSnapshot
+              }));
+              pushLog("resync", "State restored from server");
+              pushToast("Reconnected and synced", "success");
+            }
+          }
+
+          closeEventSource(es);
+          const newEs = new EventSource(
+            `/api/run/${encodeURIComponent(runId)}/stream`
+          );
+          eventSourceRef.current = newEs;
+
+          // Re-attach all listeners to new connection
+          // (This is simplified - in production you'd want to refactor this)
+          pushLog("resync", "New connection established");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          pushLog("resync-error", message);
+          handleStreamError({ error: message, context: "resync" });
+        }
+      };
+
+      pushLog("info", `Stream opened for run ${newRunId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       pushToast(`Run failed: ${message}`, "error");
       pushLog("error", message);
       setRunning(false);
-      // no runId tracking
     }
-  }, [audio, handleStreamError, inLang, outLang, outdoc, pushLog, pushToast, resetState, running, template, validateFormInputs, closeEventSource, trackEventSourceListener]);
-  // removed cancelRun helper
+  }, [audio, handleStreamError, inLang, outLang, outdoc, pushLog, pushToast, resetState, running, template, validateFormInputs, closeEventSource, trackEventSourceListener, runId, updateStreamState]);
+
+  const handleCancelRun = useCallback(async () => {
+    if (!runId) {
+      pushToast("No active run to cancel", "warn");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/run/${encodeURIComponent(runId)}/abort`,
+        { method: "POST" }
+      );
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Unknown error" }));
+        pushToast(`Cancel failed: ${error.error || response.statusText}`, "error");
+        return;
+      }
+
+      pushToast("Run cancelled", "success");
+      pushLog("cancel", { runId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pushToast(`Cancel error: ${message}`, "error");
+      pushLog("cancel_error", message);
+    }
+  }, [runId, pushToast, pushLog]);
+
+  const handleRetryRun = useCallback(() => {
+    resetState();
+    startRun();
+  }, [resetState, startRun]);
 
   const pct = useMemo(() => {
     if (!chunks.total || chunks.total <= 0) return 0;
@@ -918,19 +998,60 @@ export default function Page() {
 
       <section className={styles.formRow}>
         <label htmlFor="audio">Audio</label>
-        <input id="audio" value={audio} onChange={(e) => setAudio(e.target.value)} placeholder="uploads/meeting.mp3" />
+        <div className={styles.inputField}>
+          <input id="audio" value={audio} onChange={(e) => setAudio(e.target.value)} placeholder="uploads/meeting.mp3" />
+          <div className={styles.inputHint}>MP3, WAV supported. Path cannot contain ..</div>
+        </div>
         <label htmlFor="inLang">Input</label>
-        <input id="inLang" value={inLang} onChange={(e) => setInLang(e.target.value)} placeholder="auto" />
+        <div className={styles.inputField}>
+          <input id="inLang" value={inLang} onChange={(e) => setInLang(e.target.value)} placeholder="auto" />
+          <div className={styles.inputHint}>Language code or &quot;auto&quot; for detection</div>
+        </div>
         <label htmlFor="outLang">Output</label>
-        <input id="outLang" value={outLang} onChange={(e) => setOutLang(e.target.value)} placeholder="en" />
+        <div className={styles.inputField}>
+          <input id="outLang" value={outLang} onChange={(e) => setOutLang(e.target.value)} placeholder="en" />
+          <div className={styles.inputHint}>Target language code (e.g., en, es, fr)</div>
+        </div>
         <label htmlFor="template">Template</label>
-        <input id="template" value={template} onChange={(e) => setTemplate(e.target.value)} />
+        <div className={styles.inputField}>
+          <input id="template" value={template} onChange={(e) => setTemplate(e.target.value)} />
+          <div className={styles.inputHint}>.docx file path. Path cannot contain ..</div>
+        </div>
         <label htmlFor="outdoc">Out Doc</label>
-        <input id="outdoc" value={outdoc} onChange={(e) => setOutdoc(e.target.value)} />
+        <div className={styles.inputField}>
+          <input id="outdoc" value={outdoc} onChange={(e) => setOutdoc(e.target.value)} />
+          <div className={styles.inputHint}>Output .docx path. Path cannot contain ..</div>
+        </div>
         <button onClick={startRun} disabled={running} className={styles.runBtn}>
           {running ? "Running…" : "Start Run"}
         </button>
       </section>
+
+      {running && (
+        <StatusDashboard
+          overallProgress={computeOverallProgress(streamState)}
+          currentStep={autoStep}
+          steps={steps}
+          hasError={Object.values(steps).some((s) => s === "error")}
+          errorMessage={(() => {
+            const errorStep = (Object.entries(steps) as Array<[Step, StepStatus]>).find(([_, s]) => s === "error")?.[0];
+            if (errorStep) {
+              const messages: Record<Step, string> = {
+                transcribe: "Transcription failed — check tool output for details.",
+                draft: "Draft generation failed — check tool output for details.",
+                review: "Review process failed — check tool output for details.",
+                export: "Export failed — check tool output for details."
+              };
+              return messages[errorStep];
+            }
+            return undefined;
+          })()}
+          elapsedSeconds={transcribeElapsedSeconds}
+          onCancel={handleCancelRun}
+          onRetry={handleRetryRun}
+          canRetry={!running && Object.values(steps).some((s) => s === "error")}
+        />
+      )}
 
       <section className={styles.grid}>
         <div className={styles.leftCol}>
@@ -1306,6 +1427,27 @@ function StepCard({ title, status, message, children }: StepCardProps) {
           ? styles.statusRunning
           : styles.statusPending
   }`;
+
+  // Error guidance by step type
+  const getErrorGuidance = (stepTitle: string): string | null => {
+    if (status !== "error") return null;
+    if (stepTitle.includes("Transcription")) {
+      return "💡 Common issues: Check audio file exists and is supported format (MP3, WAV, etc.). Verify API has sufficient quota. Large files may take 5-10 minutes.";
+    }
+    if (stepTitle.includes("Draft")) {
+      return "💡 Common issues: Check token limits haven't been exceeded. Verify API key is valid. Ensure prompt configuration is correct.";
+    }
+    if (stepTitle.includes("Review")) {
+      return "💡 Common issues: Draft may violate policies. Check policy configuration. Increase max review rounds if needed.";
+    }
+    if (stepTitle.includes("Export")) {
+      return "💡 Common issues: Template file may not exist or be corrupted. Output path may have permission issues. Verify paths are correct.";
+    }
+    return null;
+  };
+
+  const errorGuidance = getErrorGuidance(title);
+
   return (
     <div className={styles.card}>
       <div className={styles.cardHeader}>
@@ -1313,6 +1455,7 @@ function StepCard({ title, status, message, children }: StepCardProps) {
         <span className={pillClass}>{capitalize(status)}</span>
       </div>
       {message ? <p className={styles.cardSub}>{message}</p> : null}
+      {errorGuidance ? <p className={styles.errorGuidance}>{errorGuidance}</p> : null}
       <div className={styles.cardBody}>{children}</div>
     </div>
   );

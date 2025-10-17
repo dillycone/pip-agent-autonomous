@@ -1,49 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { LogItem, TimelineItem, CostState, RunMetadata } from "../../lib/types";
+import type { StepStatus } from "../page";
+import { safeJsonParse } from "../../lib/utils";
 import styles from "./styles.module.css";
-
-type StepStatus = "pending" | "running" | "success" | "error";
-
-type LogItem = {
-  ts: number;
-  type: string;
-  payload: unknown;
-};
-
-type TimelineItem = {
-  id: string;
-  name: string;
-  phase: string;
-  status: StepStatus;
-  startedAt?: string;
-  finishedAt?: string;
-  durationMs?: number;
-  inputSummary?: unknown;
-  contentSummary?: unknown;
-  isError?: boolean;
-};
-
-type CostState = {
-  tokens: number;
-  usd: number;
-  breakdown: Record<string, unknown>;
-};
-
-type RunMetadata = {
-  runId: string;
-  status: "pending" | "running" | "success" | "error" | "aborted";
-  createdAt?: string;
-};
-
-function safeJsonParse<T>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
 
 export default function DevToolsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -157,8 +118,8 @@ export default function DevToolsPage() {
                 {
                   id: data.id!,
                   name: data.name!,
-                  phase: "unknown",
-                  status: "running",
+                  phase: "unknown" as const,
+                  status: "running" as StepStatus,
                   startedAt: data.startedAt,
                   inputSummary: data.inputSummary
                 }

@@ -60,7 +60,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const fileBuffer = await fs.readFile(absolutePath);
     const fileName = path.basename(absolutePath);
 
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(new Uint8Array(fileBuffer), {
       status: 200,
       headers: {
         "Content-Type": DOCX_CONTENT_TYPE,

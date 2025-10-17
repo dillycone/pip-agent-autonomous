@@ -1,6 +1,43 @@
 :root {
   color-scheme: light;
   background-color: #f8fafc;
+
+  /* CSS Variables for Light Mode */
+  --bg: #ffffff;
+  --text: #0b1221;
+  --text-muted: #475569;
+  --text-secondary: #64748b;
+  --surface: #f8fafc;
+  --surface-light: #f1f5f9;
+  --border: #e5e7eb;
+  --border-light: #e2e8f0;
+  --primary: #0ea5e9;
+  --primary-light: #7dd3fc;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --danger-light: #fee2e2;
+}
+
+/* Dark Mode Overrides */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    background-color: #0b1120;
+
+    --bg: #0b1120;
+    --text: #e5e7eb;
+    --text-muted: #cbd5e1;
+    --text-secondary: #94a3b8;
+    --surface: #1f2937;
+    --surface-light: #374151;
+    --border: #4b5563;
+    --border-light: #6b7280;
+    --primary: #0284c7;
+    --primary-light: #38bdf8;
+    --success: #16a34a;
+    --danger: #dc2626;
+    --danger-light: #7f1d1d;
+  }
 }
 
 * {

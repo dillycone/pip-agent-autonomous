@@ -246,7 +246,7 @@ export async function safeSpawn(
   // Prepare spawn options
   const spawnOptions: SpawnOptions = {
     cwd: opts.cwd,
-    env: opts.env,
+    env: opts.env as NodeJS.ProcessEnv,
     stdio: ["ignore", "pipe", "pipe"], // No stdin, capture stdout/stderr
   };
 
