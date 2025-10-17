@@ -36,6 +36,7 @@
  */
 
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { sanitizeForLogging } from "./utils/sanitize.js";
 import { safeStringify } from "./utils/safe-stringify.js";
 import { logger } from "./utils/logger.js";
@@ -95,158 +96,6 @@ function logCostSummary(summary: CostSummary) {
   logger.info(`  Gemini Output Tokens: ${summary.breakdown.geminiOutputTokens.toLocaleString()}`);
   logger.info(`  Gemini Cost: $${geminiCost.toFixed(4)}`);
   logger.info(`  Estimated Cost: $${summary.estimatedCostUSD.toFixed(4)}`);
-}
-
-function extractToolText(content: unknown): string | null {
-  if (Array.isArray(content)) {
-    const textPart = content.find(
-      part =>
-        typeof part === "object" &&
-        part !== null &&
-        typeof (part as { text?: unknown }).text === "string"
-    ) as { text?: string } | undefined;
-    return typeof textPart?.text === "string" ? textPart.text : null;
-  }
-  if (typeof content === "string") {
-    return content;
-  }
-  return null;
-}
-
-function extractGeminiTokenUsage(content: unknown): {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-} | null {
-  const rawText = extractToolText(content);
-  if (!rawText) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawText);
-    const usage = parsed?.tokenUsage;
-    if (!usage || typeof usage !== "object") {
-      return null;
-    }
-
-    const toNumber = (value: unknown): number | null => {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-      }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsedValue = Number(value);
-        return Number.isFinite(parsedValue) ? parsedValue : null;
-      }
-      return null;
-    };
-
-    const input =
-      toNumber((usage as Record<string, unknown>).inputTokens) ??
-      toNumber((usage as Record<string, unknown>).promptTokenCount) ??
-      toNumber((usage as Record<string, unknown>).promptTokens);
-
-    const output =
-      toNumber((usage as Record<string, unknown>).outputTokens) ??
-      toNumber((usage as Record<string, unknown>).candidatesTokenCount) ??
-      toNumber((usage as Record<string, unknown>).candidatesTokens) ??
-      toNumber((usage as Record<string, unknown>).responseTokenCount) ??
-      toNumber((usage as Record<string, unknown>).response_token_count) ??
-      toNumber((usage as Record<string, unknown>).responseTokens);
-
-    const total =
-      toNumber((usage as Record<string, unknown>).totalTokens) ??
-      toNumber((usage as Record<string, unknown>).totalTokenCount);
-
-    if (input === null && output === null && total === null) {
-      return null;
-    }
-
-    const inputTokens = input ?? 0;
-    const outputTokens = output ?? 0;
-    const totalTokens = total ?? inputTokens + outputTokens;
-    return { inputTokens, outputTokens, totalTokens };
-  } catch {
-    return null;
-  }
-}
-
-function extractClaudeToolUsage(content: unknown): {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-} | null {
-  const rawText = extractToolText(content);
-  if (!rawText) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawText) as {
-      usage?: {
-        input_tokens?: unknown;
-        inputTokens?: unknown;
-        output_tokens?: unknown;
-        outputTokens?: unknown;
-        cache_creation_input_tokens?: unknown;
-        cacheCreationInputTokens?: unknown;
-        cache_read_input_tokens?: unknown;
-        cacheReadInputTokens?: unknown;
-      };
-    } | null;
-
-    if (!parsed || typeof parsed !== "object" || !parsed.usage || typeof parsed.usage !== "object") {
-      return null;
-    }
-
-    const toNumber = (value: unknown): number | null => {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-      }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsedValue = Number(value);
-        return Number.isFinite(parsedValue) ? parsedValue : null;
-      }
-      return null;
-    };
-
-    const usage = parsed.usage;
-    const inputTokens =
-      toNumber(usage.input_tokens) ??
-      toNumber((usage as Record<string, unknown>).inputTokens) ??
-      0;
-    const outputTokens =
-      toNumber(usage.output_tokens) ??
-      toNumber((usage as Record<string, unknown>).outputTokens) ??
-      0;
-    const cacheCreationTokens =
-      toNumber(usage.cache_creation_input_tokens) ??
-      toNumber((usage as Record<string, unknown>).cacheCreationInputTokens) ??
-      0;
-    const cacheReadTokens =
-      toNumber(usage.cache_read_input_tokens) ??
-      toNumber((usage as Record<string, unknown>).cacheReadInputTokens) ??
-      0;
-
-    if (
-      inputTokens === 0 &&
-      outputTokens === 0 &&
-      cacheCreationTokens === 0 &&
-      cacheReadTokens === 0
-    ) {
-      return null;
-    }
-
-    return {
-      inputTokens,
-      outputTokens,
-      cacheCreationTokens,
-      cacheReadTokens
-    };
-  } catch {
-    return null;
-  }
 }
 
 // --- Cost Tracking Class ---
@@ -453,27 +302,6 @@ async function run() {
                 // ignore
               }
             }
-          } else if (payload.name === "mcp__gemini-transcriber__transcribe_audio") {
-            const usage = extractGeminiTokenUsage(payload.content);
-            if (usage) {
-              logger.info({
-                toolName: payload.name,
-                geminiInputTokens: usage.inputTokens,
-                geminiOutputTokens: usage.outputTokens,
-                geminiTotalTokens: usage.totalTokens
-              }, "🎧 Recorded Gemini transcription usage");
-            }
-          } else if (payload.name === "mcp__pip-generator__draft_pip") {
-            const usage = extractClaudeToolUsage(payload.content);
-            if (usage) {
-              logger.info({
-                toolName: payload.name,
-                claudeInputTokens: usage.inputTokens,
-                claudeOutputTokens: usage.outputTokens,
-                claudeCacheCreationTokens: usage.cacheCreationTokens,
-                claudeCacheReadTokens: usage.cacheReadTokens
-              }, "🧮 Recorded Claude drafting usage");
-            }
           }
           break;
         }
@@ -553,7 +381,10 @@ async function run() {
     }
   };
 
+  const cliRunId = `cli-${randomUUID()}`;
+
   await runPipeline({
+    runId: cliRunId,
     audioPath: audioValidation.sanitizedPath!,
     templatePath: templateSanitizedPath,
     outputPath: outputValidation.sanitizedPath!,

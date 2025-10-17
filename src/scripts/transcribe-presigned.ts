@@ -3,15 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import mime from "mime";
 import { createGeminiService } from "../services/GeminiService.js";
-import { createS3Service } from "../services/S3Service.js";
 import {
   GEMINI_API_KEY,
-  MODELS,
-  S3_PROFILE,
-  S3_BUCKET,
-  S3_PREFIX,
-  S3_PRESIGN_TTL_SECONDS,
-  S3_DELETE_AFTER
+  MODELS
 } from "../config.js";
 
 async function main() {
@@ -39,41 +33,16 @@ async function main() {
   const modelId = MODELS.GEMINI_PRO;
   const mimeType = mime.getType(abs) || "audio/wav";
 
-  console.log("[1/4] Preparing upload...");
+  console.log("[1/3] Preparing upload...");
 
-  let fileUri: string | null = null;
-  let uploadedBucket: string | null = null;
-  let uploadedKey: string | null = null;
-
-  // Try presigned first (for storage-of-record). Note: Gemini cannot consume S3 URLs directly.
-  try {
-    console.log("[2/4] Uploading to S3 (profile:", S3_PROFILE, ")...");
-    const s3 = createS3Service(S3_PROFILE);
-    const up = await s3.uploadAndPresign({
-      filePath: abs,
-      mimeType,
-      bucket: S3_BUCKET,
-      prefix: S3_PREFIX,
-      expiresInSeconds: S3_PRESIGN_TTL_SECONDS
-    });
-    fileUri = up.url;
-    uploadedBucket = up.bucket;
-    uploadedKey = up.key;
-    console.log("      S3 object:", `${up.bucket}/${up.key}`);
-    console.log("      Presigned for", S3_PRESIGN_TTL_SECONDS, "seconds");
-  } catch (e: any) {
-    console.warn("      S3 presigned upload failed:", e?.message || e);
-  }
-
-  // Always upload to Gemini File API (required for fileUri support)
-  console.log("[3/4] Uploading to Gemini File API...");
+  console.log("[2/3] Uploading to Gemini File API...");
   const up = await gemini.uploadFile(abs, mimeType);
-  fileUri = up.uri || up.fileUri || null;
+  const fileUri = up.uri || up.fileUri || null;
   if (!fileUri) {
     throw new Error("Upload failed: missing file URI");
   }
 
-  console.log("[4/4] Requesting transcription from Gemini (", modelId, ")...");
+  console.log("[3/3] Requesting transcription from Gemini (", modelId, ")...");
 
   const instructions = [
     "You are a professional HR meeting transcriber.",
@@ -110,17 +79,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Best-effort cleanup of S3 object
-  if (uploadedBucket && uploadedKey && S3_DELETE_AFTER) {
-    try {
-      const s3 = createS3Service(S3_PROFILE);
-      await s3.deleteObject(uploadedBucket, uploadedKey);
-      console.log("      Deleted S3 object");
-    } catch {
-      // ignore
-    }
-  }
-
   // Print concise summary and full transcript to stdout
   const transcript = typeof parsed?.transcript === "string" && parsed.transcript.trim()
     ? parsed.transcript.trim()
@@ -133,7 +91,6 @@ async function main() {
   console.log("\n=== Transcription Summary ===");
   console.log("Model:", modelId);
   console.log("Input:", abs);
-  console.log("Storage:", uploadedBucket ? `s3://${uploadedBucket}/${uploadedKey}` : "(skipped)");
   console.log("Transcript length:", transcript.length, "chars");
   console.log("===========================\n");
 

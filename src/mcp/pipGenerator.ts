@@ -13,7 +13,8 @@ import {
   PIP_MAX_OUTPUT_TOKENS,
   PIP_DRAFT_MODEL,
   PIP_THINKING_BUDGET,
-  getValidatedThinkingBudget
+  getValidatedThinkingBudget,
+  ENABLE_DRAFT_STREAMING
 } from "../config.js";
 import {
   IAnthropicService,
@@ -25,6 +26,7 @@ import {
 } from "../services/index.js";
 import type { UsageMetrics } from "../types/index.js";
 import { createChildLogger } from "../utils/logger.js";
+import { getDraftStreamContext, emitDraftStreamEvent } from "../pipeline/draftStreamContext.js";
 
 const logger = createChildLogger("pip-generator");
 
@@ -44,6 +46,8 @@ async function generateDraft(
 ): Promise<{ draft: string; usage?: UsageMetrics; model: string }> {
   const promptPathResolved = path.resolve(params.promptPath);
   const promptRaw = await fsService.readFile(promptPathResolved, "utf-8") as string;
+  const draftStreamContext = getDraftStreamContext();
+  const streamingEnabled = Boolean(ENABLE_DRAFT_STREAMING && draftStreamContext?.streamingEnabled);
 
   // Validate transcript is not empty or too short
   if (!params.transcript || params.transcript.trim().length < 50) {
@@ -77,6 +81,7 @@ async function generateDraft(
   const isGemini = params.model.toLowerCase().includes("gemini");
 
   if (isGemini) {
+    // Streaming previews are not yet supported for Gemini models; fall back to single response
     // Use Gemini service
     if (!geminiService) {
       throw new ConfigurationError("Gemini service not available. Missing GEMINI_API_KEY?");
@@ -112,6 +117,54 @@ async function generateDraft(
     // Use Anthropic service (Claude models)
     if (!anthropicService) {
       throw new ConfigurationError("Anthropic service not available. Missing ANTHROPIC_API_KEY?");
+    }
+
+    if (streamingEnabled) {
+      let sequence = 0;
+      let accumulator = "";
+      emitDraftStreamEvent("reset", { at: new Date().toISOString() });
+
+      const { text, usage } = await anthropicService.generateMessageStream({
+        model: params.model,
+        maxTokens: params.maxOutputTokens,
+        temperature: params.temperature,
+        systemPrompt,
+        userPrompt: filledPrompt,
+        thinking: validatedThinkingBudget > 0 ? {
+          type: "enabled",
+          budget_tokens: validatedThinkingBudget
+        } : undefined
+      }, (chunk) => {
+        if (!chunk) return;
+        sequence += 1;
+        accumulator += chunk;
+        emitDraftStreamEvent("delta", {
+          text: chunk,
+          seq: sequence,
+          length: accumulator.length,
+          at: new Date().toISOString()
+        });
+      });
+
+      emitDraftStreamEvent("complete", {
+        at: new Date().toISOString(),
+        total: accumulator.length,
+        chunks: sequence
+      });
+
+      if (!text) {
+        throw new PIPGenerationError("Claude returned an empty draft.");
+      }
+
+      const normalizedUsage: UsageMetrics | undefined = usage
+        ? {
+            ...usage,
+            provider: usage.provider ?? "claude",
+            model: params.model
+          }
+        : undefined;
+
+      return { draft: text, usage: normalizedUsage, model: params.model };
     }
 
     const { text, usage } = await anthropicService.generateMessage({

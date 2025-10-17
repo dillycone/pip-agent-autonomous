@@ -1,0 +1,21 @@
+{
+  "audioExtensions": [
+    ".mp3",
+    ".wav",
+    ".flac",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".opus",
+    ".wma",
+    ".aiff",
+    ".ape",
+    ".ac3"
+  ],
+  "templateExtensions": [
+    ".docx"
+  ],
+  "outputExtensions": [
+    ".docx"
+  ]
+}

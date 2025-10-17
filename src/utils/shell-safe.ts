@@ -30,7 +30,6 @@ import { PROJECT_ROOT } from "./paths.js";
 const ALLOWED_COMMANDS = new Set([
   "ffmpeg",
   "ffprobe",
-  "aws",
 ]);
 
 // ============================================================================
@@ -163,15 +162,20 @@ function validateArguments(
  * @returns True if argument appears to be a file path
  */
 function isFilePath(arg: string, previousArg?: string): boolean {
+  const normalizedArg = arg.trim();
+  if (/^(https?:|data:|pipe:)/i.test(normalizedArg)) {
+    return false;
+  }
+
   // Check if previous argument was a file-related flag
   const fileFlags = ["-i", "-o", "--input", "--output", "--file"];
   if (previousArg && fileFlags.includes(previousArg)) {
     return true;
   }
 
-  const hasSeparator = arg.includes("/") || arg.includes("\\");
-  const hasRelativePrefix = arg.startsWith("./") || arg.startsWith("../");
-  const hasExtension = Boolean(extname(arg));
+  const hasSeparator = normalizedArg.includes("/") || normalizedArg.includes("\\");
+  const hasRelativePrefix = normalizedArg.startsWith("./") || normalizedArg.startsWith("../");
+  const hasExtension = Boolean(extname(normalizedArg));
 
   return hasSeparator || hasRelativePrefix || hasExtension;
 }

@@ -1,6 +1,5 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import mime from "mime";
 import { cleanupTempDir } from "../utils/cleanup.js";
 import { sanitizeError } from "../utils/sanitize.js";
 import { mcpError } from "../utils/safe-stringify.js";
@@ -17,23 +16,14 @@ import {
   MODELS,
   GEMINI_CHUNK_SECONDS,
   GEMINI_SINGLE_PASS_MAX,
-  GEMINI_TRANSCRIBE_CONCURRENCY,
   GEMINI_TRANSCRIBE_RETRIES,
-  ALLOWED_AUDIO_EXTENSIONS,
-  GEMINI_INPUT_MODE,
-  S3_PROFILE,
-  S3_BUCKET,
-  S3_PREFIX,
-  S3_PRESIGN_TTL_SECONDS,
-  S3_DELETE_AFTER
+  ALLOWED_AUDIO_EXTENSIONS
 } from "../config.js";
 import {
   IGeminiService,
   IFileSystemService,
   createGeminiService,
-  createFileSystemService,
-  IS3Service,
-  createS3Service
+  createFileSystemService
 } from "../services/index.js";
 
 const logger = createChildLogger("gemini-transcriber");
@@ -50,16 +40,11 @@ function safeLog(level: "info" | "warn" | "error", data: Record<string, unknown>
 // Singletons (created once per worker)
 const fsService: IFileSystemService = createFileSystemService();
 let geminiService: IGeminiService | null = null;
-let s3Service: IS3Service | null = null;
 
 function getGeminiService(): IGeminiService {
   if (!GEMINI_API_KEY) throw new ConfigurationError("Missing GEMINI_API_KEY");
   if (!geminiService) geminiService = createGeminiService(GEMINI_API_KEY);
   return geminiService;
-}
-function getS3Service(): IS3Service {
-  if (!s3Service) s3Service = createS3Service(S3_PROFILE);
-  return s3Service;
 }
 
 const MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024; // 200MB hard cap
@@ -163,10 +148,6 @@ export const geminiTranscriber = createSdkMcpServer({
           const chunkSeconds = GEMINI_CHUNK_SECONDS;
           const shouldChunkDefault = duration === null ? true : duration > GEMINI_SINGLE_PASS_MAX;
 
-          // Only consider S3 path when explicitly requested AND a bucket is configured
-          const preferPresigned = GEMINI_INPUT_MODE === "presigned" && Boolean(S3_BUCKET);
-          safeLog('info', { GEMINI_INPUT_MODE, S3_BUCKET, preferPresigned }, 'Transcriber input-mode configuration');
-
           // Warn user about long processing times for larger files
           if (duration && duration > 120) {
             const estimatedMinutes = Math.ceil(duration / 60);
@@ -177,53 +158,7 @@ export const geminiTranscriber = createSdkMcpServer({
             );
           }
 
-          const runSingleViaS3AndUpload = async () => {
-            // For audit: store on S3, then upload the local file to Gemini File API
-            safeLog('info', { mode: 's3+upload' }, "🎤 Transcribing audio: store in S3, then Gemini upload (single pass)...");
-            const s3 = getS3Service();
-            const mimeType = mime.getType(validatedAudioPath) || "audio/wav";
-            let uploadedKey: string | null = null;
-            let uploadedBucket: string | null = null;
-            try {
-              const uploaded = await s3.uploadAndPresign({
-                filePath: validatedAudioPath,
-                mimeType,
-                bucket: S3_BUCKET,
-                prefix: S3_PREFIX,
-                expiresInSeconds: S3_PRESIGN_TTL_SECONDS
-              });
-              uploadedKey = uploaded.key;
-              uploadedBucket = uploaded.bucket;
-            } catch (e) {
-              const se = sanitizeError(e);
-              safeLog('warn', { error: se }, "S3 upload/presign failed; continuing with direct Gemini upload");
-            }
-
-            const res = await transcribeChunk({
-              filePath: validatedAudioPath,
-              offsetSeconds: 0,
-              gemini,
-              modelId,
-              instructionsBase,
-              retries: GEMINI_TRANSCRIBE_RETRIES,
-              thinkingBudget: 128
-            });
-
-            if (uploadedBucket && uploadedKey && S3_DELETE_AFTER) {
-              try {
-                await s3.deleteObject(uploadedBucket, uploadedKey);
-              } catch {/* ignore */}
-            }
-
-            const transcript = res.transcript.trim() || res.segments.map(seg => seg.text).join("\n").trim();
-            return buildSuccess(transcript, res.segments, null, {
-              totalChunks: 1,
-              processedChunks: 1,
-              startChunk: 0
-            });
-          };
-
-          const runSingleViaUpload = async () => {
+          const runSingle = async () => {
             safeLog('info', { mode: 'upload' }, "🎤 Transcribing audio via SDK upload (single pass)...");
             const res = await transcribeChunk({
               filePath: validatedAudioPath,
@@ -242,39 +177,16 @@ export const geminiTranscriber = createSdkMcpServer({
             });
           };
 
-          const runSingle = async () => {
-            if (preferPresigned) {
-              try {
-                return await runSingleViaS3AndUpload();
-              } catch (e) {
-                const se = sanitizeError(e);
-                safeLog('warn', { error: se }, "Presigned single-pass failed; considering fallback");
-                return await runSingleViaUpload();
-              }
-            }
-
-            return await runSingleViaUpload();
-          };
-
-          // Prefer presigned single-pass regardless of duration; fallback to chunking on failure
-          if (preferPresigned) {
-            try {
-              return await runSingle();
-            } catch {
-              // fall through to chunking
-            }
-          } else {
-            if (!shouldChunkDefault) {
-              return await runSingle();
-            }
-          }
-
           const normalizedStartChunk =
             Number.isFinite(startChunk) && startChunk > 0
               ? Math.floor(startChunk)
               : 0;
 
-          // If we got here, we either prefer upload mode and need chunking, or presigned failed and we must chunk
+          if (!shouldChunkDefault && normalizedStartChunk === 0) {
+            return await runSingle();
+          }
+
+          // If we got here, we either need chunking by default or the caller requested pagination
 
           let tmpDir: string | null = null;
           try {

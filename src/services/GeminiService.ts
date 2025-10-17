@@ -184,9 +184,7 @@ export class GeminiService implements IGeminiService {
   async uploadFile(file: GeminiUploadSource, mimeType: string): Promise<UploadedFile> {
     const ai = await this.ensureClient();
 
-    const payload: Record<string, unknown> = {
-      config: { mimeType }
-    };
+    const payload: Record<string, unknown> = { mimeType };
 
     if (typeof file === "string") {
       payload.file = file;
@@ -204,7 +202,7 @@ export class GeminiService implements IGeminiService {
     const normalized = normalizeUploadedFile(uploaded);
 
     if (!normalized.uri && !normalized.fileUri) {
-      throw new Error("Gemini upload response missing file URI");
+      throw new Error("Gemini upload response missing file URI; ensure the SDK version supports uploads that return a uri.");
     }
 
     if (!normalized.mimeType && !normalized.fileMimeType) {
@@ -349,6 +347,28 @@ function normalizeUploadedFile(uploaded: unknown): UploadedFile {
   return normalized;
 }
 
+function isUsageMetadataCandidate(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const indicativeKeys = [
+    "inputTokenCount",
+    "outputTokenCount",
+    "totalTokenCount",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cachedContentTokenCount",
+    "cachedContentTokens",
+    "cachedTokens"
+  ];
+  return indicativeKeys.some((key) => key in record);
+}
+
 /**
  * Extract usage metadata from the Gemini SDK response.
  *
@@ -361,22 +381,44 @@ function extractUsageMetadata(result: unknown): Record<string, unknown> | undefi
     return undefined;
   }
 
-  const candidates = [
-    (result as any).usageMetadata,
-    (result as any).usage_metadata,
-    (result as any).response?.usageMetadata,
-    (result as any).response?.usage_metadata,
-    Array.isArray((result as any).response?.candidates)
-      ? (result as any).response.candidates[0]?.usageMetadata
-      : undefined,
-    Array.isArray((result as any).response?.candidates)
-      ? (result as any).response.candidates[0]?.usage_metadata
-      : undefined
-  ];
+  const rootRecord = result as Record<string, unknown>;
 
-  for (const entry of candidates) {
-    if (entry && typeof entry === "object") {
-      return entry as Record<string, unknown>;
+  const directUsage = rootRecord.usageMetadata;
+  if (isUsageMetadataCandidate(directUsage)) {
+    return directUsage;
+  }
+
+  const legacyDirectUsage = rootRecord.usage_metadata;
+  if (isUsageMetadataCandidate(legacyDirectUsage)) {
+    return legacyDirectUsage;
+  }
+
+  const response = rootRecord.response;
+  if (response && typeof response === "object" && !Array.isArray(response)) {
+    const responseRecord = response as Record<string, unknown>;
+    const responseUsage = responseRecord.usageMetadata;
+    if (isUsageMetadataCandidate(responseUsage)) {
+      return responseUsage;
+    }
+    const legacyResponseUsage = responseRecord.usage_metadata;
+    if (isUsageMetadataCandidate(legacyResponseUsage)) {
+      return legacyResponseUsage;
+    }
+
+    const candidates = responseRecord.candidates;
+    if (Array.isArray(candidates)) {
+      for (const candidate of candidates) {
+        if (!candidate || typeof candidate !== "object") continue;
+        const candidateRecord = candidate as Record<string, unknown>;
+        const candidateUsage = candidateRecord.usageMetadata;
+        if (isUsageMetadataCandidate(candidateUsage)) {
+          return candidateUsage;
+        }
+        const legacyCandidateUsage = candidateRecord.usage_metadata;
+        if (isUsageMetadataCandidate(legacyCandidateUsage)) {
+          return legacyCandidateUsage;
+        }
+      }
     }
   }
 

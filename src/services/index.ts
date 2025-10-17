@@ -52,16 +52,6 @@ export type {
   GenerateContentResult
 } from "./GeminiService.js";
 
-// S3 Service
-export {
-  S3Service,
-  createS3Service
-} from "./S3Service.js";
-export type {
-  IS3Service,
-  UploadResult
-} from "./S3Service.js";
-
 // File System Service
 export {
   FileSystemService,

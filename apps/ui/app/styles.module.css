@@ -79,17 +79,71 @@
   padding: 12px;
 }
 
+.stepperRow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.followBtn {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.followBtn:hover {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+.followBtn:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
 .step {
   display: flex;
   gap: 10px;
   align-items: center;
   padding: 8px;
   border-radius: 10px;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  border: 1px solid transparent;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.step:hover {
+  background: #f8fafc;
+}
+
+.step:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
 }
 
 .step + .step {
   margin-top: 6px;
+}
+
+.stepActive {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 1px #bae6fd inset;
+}
+
+.stepFocused {
+  border-color: #2563eb;
+  background: #eff6ff;
 }
 
 .stepPending {
@@ -246,6 +300,63 @@
   gap: 12px;
 }
 
+.cardHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cardHeading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #0b1221;
+}
+
+.cardSub {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.cardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.statusPending {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.statusRunning {
+  background: #cffafe;
+  color: #0f766e;
+}
+
+.statusSuccess {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.statusError {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .progressRow {
   display: grid;
   grid-template-columns: 96px 1fr;
@@ -270,6 +381,9 @@
   display: grid;
   place-items: center;
   font-weight: 700;
+  text-align: center;
+  gap: 2px;
+  line-height: 1.2;
 }
 
 .ringSub {
@@ -292,6 +406,137 @@
 .kpiValue {
   font-weight: 700;
   font-size: 16px;
+}
+
+.kpiHint {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.emptyState {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionHeading {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.timelineCompact {
+  gap: 8px;
+}
+
+.streamSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.streamLines {
+  background: #0b1120;
+  color: #e2e8f0;
+  padding: 10px;
+  border-radius: 8px;
+  font-family: "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.streamLine + .streamLine {
+  margin-top: 4px;
+}
+
+.streamBadge {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  color: #22d3ee;
+}
+
+.reviewList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reviewItem {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.reviewHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.reviewBadge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.reviewApproved {
+  font-size: 12px;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.reviewChanges {
+  font-size: 12px;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.reviewListBullets {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.reviewListBullets li + li {
+  margin-top: 4px;
+}
+
+.exportInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.exportPath {
+  font-size: 13px;
+  font-family: "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: #0f172a;
+}
+
+.transcriptPreview {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #0f172a;
 }
 
 .artifacts {

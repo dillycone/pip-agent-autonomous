@@ -22,6 +22,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { TextBlock } from "@anthropic-ai/sdk/resources/messages";
 import type { UsageMetrics } from "../types/index.js";
+import { createChildLogger } from "../utils/logger.js";
 
 /**
  * Parameters for message generation
@@ -65,6 +66,17 @@ export interface IAnthropicService {
   generateMessage(
     params: MessageParams
   ): Promise<{ text: string; usage?: UsageMetrics }>;
+
+  /**
+   * Generate a text message using Claude with streaming partials.
+   *
+   * @param params - Message generation parameters
+   * @param onDelta - Callback that receives incremental text chunks as they stream
+   */
+  generateMessageStream(
+    params: MessageParams,
+    onDelta: (chunk: string) => void
+  ): Promise<{ text: string; usage?: UsageMetrics }>;
 }
 
 /**
@@ -75,6 +87,7 @@ export interface IAnthropicService {
  */
 export class AnthropicService implements IAnthropicService {
   private client: Anthropic;
+  private logger = createChildLogger("anthropic-service");
 
   /**
    * Create a new Anthropic service instance
@@ -126,6 +139,80 @@ export class AnthropicService implements IAnthropicService {
     }
 
     return { text, usage: response.usage as UsageMetrics | undefined };
+  }
+
+  async generateMessageStream(params: MessageParams, onDelta: (chunk: string) => void): Promise<{ text: string; usage?: UsageMetrics }> {
+    const requestParams: any = {
+      model: params.model,
+      max_tokens: params.maxTokens,
+      temperature: params.temperature,
+      system: params.systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: params.userPrompt
+        }
+      ]
+    };
+
+    if (params.thinking) {
+      requestParams.thinking = params.thinking;
+    }
+
+    const stream = await this.client.messages.stream(requestParams);
+    const streamAny = stream as any;
+
+    let fullText = "";
+
+    streamAny.on?.("text", (delta: string) => {
+      fullText += delta;
+      try {
+        onDelta(delta);
+      } catch (error) {
+        const truncated = delta.length > 200 ? `${delta.slice(0, 200)}…` : delta;
+        const serializedError =
+          error instanceof Error
+            ? { message: error.message, name: error.name }
+            : { message: String(error) };
+        this.logger.warn(
+          { delta: truncated, error: serializedError },
+          "Stream delta callback threw; continuing"
+        );
+        // swallow callback errors to avoid breaking the stream
+      }
+    });
+
+    const finalMessage: any = typeof streamAny.finalMessage === "function" ? await streamAny.finalMessage() : undefined;
+    if (!finalMessage) {
+      // Fallback to collecting the final response to ensure text availability when available
+      const fallbackResponse: any = typeof streamAny.finalResponse === "function" ? await streamAny.finalResponse() : undefined;
+      if (fallbackResponse && typeof fallbackResponse === "object" && Array.isArray(fallbackResponse.content)) {
+        const combined = fallbackResponse.content
+          .filter((block: any) => block?.type === "text" && typeof block.text === "string")
+          .map((block: any) => block.text as string)
+          .join("");
+        if (!fullText) {
+          fullText = combined;
+        }
+        return {
+          text: (fullText || combined || "").trim(),
+          usage: fallbackResponse.usage as UsageMetrics | undefined
+        };
+      }
+      return { text: fullText.trim(), usage: undefined };
+    }
+
+    if (!fullText && Array.isArray(finalMessage.content)) {
+      fullText = finalMessage.content
+        .filter((block: any) => block?.type === "text" && typeof block.text === "string")
+        .map((block: any) => block.text as string)
+        .join("");
+    }
+
+    return {
+      text: fullText.trim(),
+      usage: finalMessage.usage as UsageMetrics | undefined
+    };
   }
 }
 

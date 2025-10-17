@@ -1,6 +1,7 @@
 import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
+import PizZip from "pizzip";
 import { geminiTranscriber } from "../mcp/geminiTranscriber.js";
 import { docxExporter } from "../mcp/docxExporter.js";
 import { pipGenerator } from "../mcp/pipGenerator.js";
@@ -9,7 +10,8 @@ import {
   MODELS,
   MAX_TURNS,
   MAX_REVIEW_ROUNDS,
-  PIP_DRAFT_MODEL
+  PIP_DRAFT_MODEL,
+  ENABLE_DRAFT_STREAMING
 } from "../config.js";
 import {
   isStreamEvent,
@@ -20,6 +22,7 @@ import { sanitizeError, sanitizePath } from "../utils/sanitize.js";
 import { TokenCostTracker } from "../utils/costTracker.js";
 import { extractToolUsage } from "../utils/toolUsage.js";
 import { extractModelFamily, withModelFamilyInDocxPath } from "../utils/modelFamily.js";
+import { runWithDraftStreamContext, emitDraftStreamEvent } from "./draftStreamContext.js";
 import type { RunStatus } from "../server/runStore.js";
 
 const MCP_SERVERS = {
@@ -44,6 +47,7 @@ export interface PipelineHandlers {
 }
 
 export interface RunPipelineParams {
+  runId: string;
   audioPath: string;
   templatePath: string;
   outputPath: string;
@@ -144,8 +148,44 @@ function toSerializableError(error: unknown) {
   return rest;
 }
 
+function isValidDocx(pathToDocx: string, failureReason?: { reason?: string }): boolean {
+  try {
+    if (!fs.existsSync(pathToDocx)) {
+      if (failureReason) failureReason.reason = "DOCX file is missing";
+      return false;
+    }
+
+    const content = fs.readFileSync(pathToDocx);
+    if (content.length === 0) {
+      if (failureReason) failureReason.reason = "DOCX file is empty";
+      return false;
+    }
+
+    const zip = new PizZip(content);
+    const requiredEntries = ["[Content_Types].xml", "_rels/.rels", "word/document.xml"];
+
+    for (const entry of requiredEntries) {
+      const file = zip.file(entry);
+      if (!file || file.dir) {
+        if (failureReason) failureReason.reason = `Missing required entry: ${entry}`;
+        return false;
+      }
+    }
+
+    return true;
+  } catch (error) {
+    if (failureReason) {
+      failureReason.reason = error instanceof Error ? error.message : "Unknown validation error";
+    }
+    return false;
+  }
+}
+
 export async function runPipeline(params: RunPipelineParams): Promise<void> {
+  console.log(`[runPipeline] ENTRY - runId: ${params.runId}`);
+
   const {
+    runId,
     audioPath,
     templatePath,
     outputPath,
@@ -158,8 +198,20 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
     handlers
   } = params;
 
-  const emit = handlers.emit;
-  let currentRunStatus: RunStatus = "pending";
+  console.log(`[runPipeline] Parameters extracted, paths:`, {
+    audioPath,
+    templatePath,
+    outputPath,
+    promptPath,
+    guidelinesPath
+  });
+
+  console.log(`[runPipeline] About to define runCore function`);
+
+  const runCore = async (): Promise<void> => {
+    console.log(`[runPipeline/runCore] ENTRY`);
+    const emit = handlers.emit;
+    let currentRunStatus: RunStatus = "pending";
   let lastError: unknown;
   let pipDraftModel: string | null = PIP_DRAFT_MODEL || null;
   let pipModelFamily: string | null = pipDraftModel ? extractModelFamily(pipDraftModel) : null;
@@ -259,13 +311,39 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
     });
   };
 
+  const MAX_JSON_DEBUG_LOGS = 5;
+  let jsonParseDebugCount = 0;
+  const logJsonParseFailure = (source: string, raw: string, error: unknown) => {
+    if (jsonParseDebugCount >= MAX_JSON_DEBUG_LOGS) {
+      return;
+    }
+    jsonParseDebugCount += 1;
+    emit("log", {
+      level: "debug",
+      message: `Failed to parse JSON from ${source}`,
+      details: {
+        snippet: raw.slice(0, 200),
+        rawLength: raw.length,
+        error: sanitizeError(error)
+      }
+    });
+  };
+
   const judgeGuidelines = fs.readFileSync(guidelinesPath, "utf-8");
   const judgeAgent = makePolicyJudgeAgent(judgeGuidelines, outputLanguage);
 
   const abortSignal: AbortSignal = signal ?? new AbortController().signal;
   let aborted = false;
+  let pipelineIterator: AsyncIterableIterator<SDKMessage> | undefined;
   const abortListener = () => {
     aborted = true;
+    clearPreviewTimeouts();
+    emit("log", { level: "warn", message: "Abort requested; stopping pipeline iteration" });
+    if (pipelineIterator?.return) {
+      Promise.resolve()
+        .then(() => pipelineIterator?.return?.())
+        .catch(() => undefined);
+    }
   };
   abortSignal.addEventListener("abort", abortListener);
 
@@ -277,6 +355,13 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
 
   setRunStatus("running");
   let hasFinalEvent = false;
+
+  console.log(`[runPipeline] Creating query iterator for run ${runId}`);
+  console.log(`[runPipeline] Config:`, {
+    model: MODELS.CLAUDE_SONNET,
+    maxTurns: MAX_TURNS,
+    allowedTools: ALLOWED_TOOLS
+  });
 
   const iterator = query({
     prompt: buildPipelinePrompt({
@@ -296,39 +381,66 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
       maxTurns: MAX_TURNS
     }
   });
+  pipelineIterator = iterator;
+  console.log(`[runPipeline] Iterator created, entering message loop`);
 
   let judgeRound = 0;
   let transcribeProcessed = 0;
   let transcribeTotal: number | null = null;
   let transcriptAccumulator = "";
   const chunkSnippets = new Map<number, string>();
+  let draftPreviewEmitted = false;
+  let processedProgressSource: "explicit" | "heuristic" = "heuristic";
+  let totalProgressSource: "explicit" | "heuristic" = "heuristic";
+  const previewTimeouts: NodeJS.Timeout[] = [];
 
-  type Inflight = { id: string; name: string; startedAt: string };
-  const inflightMap: Map<string, Inflight[]> = new Map();
-  const toolId = (name: string) =>
-    `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const pushInflight = (name: string): Inflight => {
-    const id = toolId(name);
+  const clearPreviewTimeouts = () => {
+    while (previewTimeouts.length > 0) {
+      const timeout = previewTimeouts.pop();
+      if (timeout) clearTimeout(timeout);
+    }
+  };
+
+  type Inflight = { id: string; name?: string; startedAt: string };
+  const inflightMap: Map<string, Inflight> = new Map();
+  const fallbackToolId = (name?: string) =>
+    `${name || "tool"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const pushInflight = (candidateId: string | undefined, name?: string): Inflight => {
+    const id =
+      typeof candidateId === "string" && candidateId.trim().length > 0
+        ? candidateId
+        : fallbackToolId(name);
     const startedAt = new Date().toISOString();
-    const item = { id, name, startedAt };
-    const arr = inflightMap.get(name) ?? [];
-    arr.push(item);
-    inflightMap.set(name, arr);
+    const item: Inflight = { id, name, startedAt };
+    inflightMap.set(id, item);
     return item;
   };
-  const popInflight = (name: string): Inflight | undefined => {
-    const arr = inflightMap.get(name) ?? [];
-    const item = arr.shift();
-    if (arr.length === 0) inflightMap.delete(name);
-    else inflightMap.set(name, arr);
-    return item;
+  const takeInflight = (candidateId?: string, name?: string): Inflight | undefined => {
+    if (candidateId && inflightMap.has(candidateId)) {
+      const item = inflightMap.get(candidateId);
+      inflightMap.delete(candidateId);
+      return item;
+    }
+    if (name) {
+      const entry = Array.from(inflightMap.values()).find((value) => value.name === name);
+      if (entry) {
+        inflightMap.delete(entry.id);
+        return entry;
+      }
+    }
+    return undefined;
   };
 
   sendStatus("transcribe", "running");
 
+  console.log(`[runPipeline] Starting iterator loop for run ${runId}`);
+
   try {
     try {
+      let messageCount = 0;
       for await (const message of iterator) {
+        messageCount++;
+        console.log(`[runPipeline] Message ${messageCount}:`, message.type);
         ensureNotAborted();
         costTracker.recordMessage(message);
         pushCost();
@@ -349,9 +461,12 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
           Array.isArray(assistantMsg.content)
         ) {
           for (const block of assistantMsg.content) {
-            if (block && typeof block === "object" && block.type === "tool_use") {
+              if (block && typeof block === "object" && block.type === "tool_use") {
               const toolUse = block as { id: string; name: string; input: unknown };
-              const item = pushInflight(toolUse.name);
+              const item = pushInflight(
+                typeof toolUse.id === "string" ? toolUse.id : undefined,
+                toolUse.name
+              );
               emit("tool_use", {
                 id: item.id,
                 name: toolUse.name,
@@ -364,6 +479,9 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
               } else if (toolUse.name.includes("pip-generator")) {
                 sendStatus("transcribe", "success");
                 sendStatus("draft", "running");
+                if (ENABLE_DRAFT_STREAMING) {
+                  emitDraftStreamEvent("reset", { at: new Date().toISOString(), runId });
+                }
                 if (
                   toolUse.input &&
                   typeof toolUse.input === "object" &&
@@ -398,31 +516,43 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
 
         if (isToolResultEvent(eventData)) {
           const resultData = {
+            id: (eventData as { id?: string }).id,
             name: (eventData as { name?: string }).name,
             isError: (eventData as { isError?: boolean }).isError,
             content: (eventData as { content?: unknown }).content
           };
           const finishedAt = new Date().toISOString();
-          const inflight = resultData.name ? popInflight(resultData.name) : undefined;
-          const id = inflight?.id ?? toolId(resultData.name || "tool");
+          const inflight = takeInflight(
+            typeof resultData.id === "string" ? resultData.id : undefined,
+            resultData.name
+          );
+          const id =
+            inflight?.id ??
+            (typeof resultData.id === "string" && resultData.id.trim().length > 0
+              ? resultData.id
+              : fallbackToolId(resultData.name));
           const startedAt = inflight?.startedAt;
           const durationMs = startedAt
             ? Date.parse(finishedAt) - Date.parse(startedAt)
             : undefined;
           emit("tool_result", {
             id,
-            ...resultData,
+            name: resultData.name,
+            isError: resultData.isError,
+            content: resultData.content,
             finishedAt,
             durationMs
           });
 
           const name = resultData.name;
+
           if (name?.includes("gemini-transcriber")) {
             if (resultData.isError) {
               sendStatus("transcribe", "error");
             } else {
               sendStatus("transcribe", "success");
               sendStatus("draft", "running");
+              draftPreviewEmitted = false;
             }
           } else if (name?.includes("pip-generator")) {
             if (resultData.isError) {
@@ -483,6 +613,7 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
             try {
               const parsed = JSON.parse(textPart) as {
                 transcript?: string;
+                draft?: string;
                 processedChunks?: number;
                 totalChunks?: number;
                 startChunk?: number;
@@ -505,8 +636,41 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
                   updateDraftModel(usageModel);
                 }
               }
+              if (!ENABLE_DRAFT_STREAMING && !resultData.isError && name?.includes("pip-generator") && !draftPreviewEmitted) {
+                const draftText = typeof parsed.draft === "string" ? parsed.draft.trim() : "";
+                if (draftText) {
+                  draftPreviewEmitted = true;
+                  const snippetLines = draftText
+                    .split(/\r?\n/)
+                    .map((line) => line.trim())
+                    .filter((line): line is string => line.length > 0)
+                    .slice(0, 3);
+                  snippetLines.forEach((line, idx) => {
+                    const timeout = setTimeout(() => {
+                      emit("draft_preview_chunk", {
+                        text: line,
+                        index: idx,
+                        total: snippetLines.length,
+                        at: new Date().toISOString()
+                      });
+                    }, idx * 120);
+                    previewTimeouts.push(timeout);
+                  });
+                  const completionDelay = snippetLines.length * 120 + 80;
+                  previewTimeouts.push(
+                    setTimeout(() => {
+                      emit("draft_preview_complete", {
+                        total: snippetLines.length,
+                        at: new Date().toISOString()
+                      });
+                    }, completionDelay)
+                  );
+                }
+              }
+
               if (typeof parsed.totalChunks === "number" && parsed.totalChunks > 0) {
                 transcribeTotal = Math.max(transcribeTotal ?? 0, parsed.totalChunks);
+                totalProgressSource = "explicit";
               }
               if (typeof parsed.processedChunks === "number") {
                 const start =
@@ -515,22 +679,26 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
                     : transcribeProcessed;
                 const candidateProcessed = start + parsed.processedChunks;
                 transcribeProcessed = Math.max(transcribeProcessed, candidateProcessed);
+                processedProgressSource = "explicit";
               }
               if (
                 typeof parsed.startChunk === "number" &&
                 typeof parsed.processedChunks !== "number"
               ) {
                 transcribeProcessed = Math.max(transcribeProcessed, parsed.startChunk);
+                processedProgressSource = "explicit";
               }
               if (typeof parsed.nextChunk === "number") {
                 const inferredTotal = parsed.nextChunk + 1;
                 transcribeTotal = Math.max(transcribeTotal ?? 0, inferredTotal);
+                totalProgressSource = "explicit";
               } else if (
                 parsed.nextChunk === null &&
                 transcribeTotal === null &&
                 transcribeProcessed > 0
               ) {
                 transcribeTotal = transcribeProcessed;
+                totalProgressSource = "heuristic";
               }
 
               const rawTranscript = typeof parsed.transcript === "string" ? parsed.transcript : "";
@@ -548,9 +716,11 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
 
               if (transcribeProcessed === 0 && transcriptText) {
                 transcribeProcessed = 1;
+                processedProgressSource = "heuristic";
               }
               if (transcribeTotal === null && transcriptText) {
                 transcribeTotal = transcribeProcessed > 0 ? transcribeProcessed : 1;
+                totalProgressSource = "heuristic";
               }
 
               if (transcriptText) {
@@ -565,21 +735,29 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
                   transcriptAccumulator = transcriptText;
                 }
                 const preview = (transcriptAccumulator || transcriptText).slice(0, 1500);
-                emit("transcript_chunk", {
+                const transcriptEvent: Record<string, unknown> = {
                   transcript: preview,
                   processedChunks: transcribeProcessed || 1,
                   totalChunks: transcribeTotal ?? (transcribeProcessed || 1),
                   at: new Date().toISOString()
-                });
+                };
+                if (processedProgressSource === "heuristic" || totalProgressSource === "heuristic") {
+                  transcriptEvent.meta = { progressMode: "heuristic" as const };
+                }
+                emit("transcript_chunk", transcriptEvent);
               } else if (transcribeProcessed > 0 || transcribeTotal !== null) {
-                emit("transcript_chunk", {
+                const transcriptEvent: Record<string, unknown> = {
                   processedChunks: transcribeProcessed || undefined,
                   totalChunks: transcribeTotal ?? undefined,
                   at: new Date().toISOString()
-                });
+                };
+                if (processedProgressSource === "heuristic" || totalProgressSource === "heuristic") {
+                  transcriptEvent.meta = { progressMode: "heuristic" as const };
+                }
+                emit("transcript_chunk", transcriptEvent);
               }
-            } catch {
-              // Ignore non-JSON payloads
+            } catch (error) {
+              logJsonParseFailure("tool_result_content", textPart, error);
             }
           }
 
@@ -630,8 +808,8 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
                     : "running";
                 sendStatus("review", reviewStatus, { round: judgeRound });
               }
-            } catch {
-              // Ignore JSON parse issues
+            } catch (error) {
+              logJsonParseFailure("policy_judge_verdict", candidate, error);
             }
           }
         }
@@ -645,7 +823,8 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
             const cleaned = rawResult.replace(/```json\s*|```/g, "").trim();
             try {
               payload = JSON.parse(cleaned);
-            } catch {
+            } catch (error) {
+              logJsonParseFailure("final_result_payload", cleaned, error);
               payload = rawResult;
             }
           }
@@ -683,15 +862,17 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
         }
       }
       }
+      console.log(`[runPipeline] Iterator loop completed normally, processed ${messageCount} messages`);
     } catch (workerError) {
+      console.error(`[runPipeline] Worker error:`, workerError);
       emit("log", {
         level: "warn",
         message: "Worker process encountered an error, checking for output file..."
       });
 
       if (fs.existsSync(outputPath)) {
-        const stats = fs.statSync(outputPath);
-        if (stats.size > 1000) {
+        const failureReason: { reason?: string } = {};
+        if (isValidDocx(outputPath, failureReason)) {
           emit("log", { level: "info", message: "Output file was created successfully despite worker error" });
           sendStatus("export", "success");
           const finalDocxPath = ensureDocxPathHasModel(outputPath);
@@ -704,7 +885,18 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
           });
           hasFinalEvent = true;
           setRunStatus("success");
+          clearPreviewTimeouts();
           return;
+        } else if (failureReason.reason) {
+          emit("log", {
+            level: "warn",
+            message: `Recovered DOCX failed validation: ${failureReason.reason}`
+          });
+        } else {
+          emit("log", {
+            level: "warn",
+            message: "Recovered DOCX failed validation for an unknown reason"
+          });
         }
       }
 
@@ -712,9 +904,13 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
     }
 
     if (!hasFinalEvent && ["running", "pending"].includes(currentRunStatus)) {
-      setRunStatus("success");
+      console.log(`[runPipeline] No final event emitted, status: ${currentRunStatus}`);
+      const details = { message: "No final event emitted" };
+      emit("error", details);
+      setRunStatus("error", details);
     }
   } catch (error) {
+    console.error(`[runPipeline] Caught error in outer try-catch:`, error);
     if (error instanceof RunAbortError) {
       setRunStatus("aborted");
       emit("error", { message: "Run aborted by client" });
@@ -726,7 +922,33 @@ export async function runPipeline(params: RunPipelineParams): Promise<void> {
       setRunStatus("error", error);
     }
   } finally {
+    console.log(`[runPipeline] Finally block, status: ${currentRunStatus}, hasFinalEvent: ${hasFinalEvent}`);
+    clearPreviewTimeouts();
     abortSignal.removeEventListener("abort", abortListener);
     handlers.finish(currentRunStatus, lastError);
   }
+};
+
+  console.log(`[runPipeline] runCore function defined successfully`);
+  console.log(`[runPipeline] ENABLE_DRAFT_STREAMING: ${ENABLE_DRAFT_STREAMING}`);
+
+  if (ENABLE_DRAFT_STREAMING) {
+    console.log(`[runPipeline] Running with draft stream context`);
+    await runWithDraftStreamContext(
+      {
+        runId,
+        streamingEnabled: true,
+        emit: handlers.emit
+      },
+      async () => {
+        emitDraftStreamEvent("reset", { at: new Date().toISOString(), runId });
+        await runCore();
+      }
+    );
+  } else {
+    console.log(`[runPipeline] Running without draft stream context`);
+    await runCore();
+  }
+
+  console.log(`[runPipeline] runPipeline completed for ${runId}`);
 }

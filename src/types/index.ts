@@ -333,6 +333,7 @@ export interface ToolResultEventData {
   name?: string;
   content: unknown;
   isError?: boolean;
+  id?: string;
 }
 
 /**

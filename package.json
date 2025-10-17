@@ -15,10 +15,6 @@
     "test": "tsx --test tests/validation.test.ts tests/runRequestValidator.test.ts tests/cost.test.ts tests/runStore.test.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.616.0",
-    "@aws-sdk/client-sts": "^3.616.0",
-    "@aws-sdk/credential-providers": "^3.616.0",
-    "@aws-sdk/s3-request-presigner": "^3.616.0",
     "@anthropic-ai/claude-agent-sdk": "^0.1.14",
     "@anthropic-ai/sdk": "^0.65.0",
     "@google/genai": "^0.11.0",

@@ -237,10 +237,11 @@ export function sanitizeForLogging(data: unknown, maxDepth: number = 3): unknown
     const sanitized: Record<string, unknown> = {};
     let count = 0;
     const maxKeys = 50;
+    const keys = Object.keys(data as Record<string, unknown>);
 
-    for (const key in data) {
+    for (const key of keys) {
       if (count >= maxKeys) {
-        sanitized["..."] = `[${Object.keys(data).length - maxKeys} more keys]`;
+        sanitized["..."] = `[${keys.length - maxKeys} more keys]`;
         break;
       }
 

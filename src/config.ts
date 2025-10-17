@@ -9,6 +9,13 @@
  */
 
 import "dotenv/config";
+import allowedExtensions from "./config/allowedExtensions.json" with { type: "json" };
+
+const ALLOWED_EXTENSION_CONFIG = allowedExtensions as {
+  audioExtensions: readonly string[];
+  templateExtensions: readonly string[];
+  outputExtensions: readonly string[];
+};
 
 // ============================================================================
 // API Keys
@@ -25,6 +32,11 @@ export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
  * Required for audio transcription
  */
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+/**
+ * Feature flag: enables true streaming draft previews via SSE.
+ */
+export const ENABLE_DRAFT_STREAMING = process.env.ENABLE_DRAFT_STREAMING === "true";
 
 // ============================================================================
 // API Key Format Validation
@@ -253,48 +265,6 @@ export const GEMINI_TRANSCRIBE_RETRIES = Math.max(0, Number(process.env.GEMINI_T
 export const GEMINI_TRANSCRIBE_THINKING_BUDGET = Math.max(128, Math.min(32768, Number(process.env.GEMINI_TRANSCRIBE_THINKING_BUDGET || 128)));
 
 // ============================================================================
-// S3 + Presigned URL Configuration
-// ============================================================================
-
-/**
- * AWS CLI profile to use for S3 ops
- * Default: BCRoot (per user instruction)
- */
-export const S3_PROFILE = process.env.S3_PROFILE || "BCRoot";
-
-/**
- * Target S3 bucket for audio uploads
- * If unset, the app may attempt to create one on the fly
- */
-export const S3_BUCKET = process.env.S3_BUCKET;
-
-/**
- * Optional key prefix for uploaded audio objects (no leading slash)
- * Default: "audio"
- */
-export const S3_PREFIX = (process.env.S3_PREFIX || "audio").replace(/^\/+|\/+$/g, "");
-
-/**
- * TTL for presigned URLs in seconds
- * Default: 3600
- */
-export const S3_PRESIGN_TTL_SECONDS = Math.max(60, Number(process.env.S3_PRESIGN_TTL_SECONDS || 3600));
-
-/**
- * Whether to delete S3 object after transcription completes
- * Default: true
- */
-export const S3_DELETE_AFTER = String(process.env.S3_DELETE_AFTER || "true").toLowerCase() === "true";
-
-/**
- * Input mode for Gemini file ingestion
- * - "upload"    → Upload file directly to Gemini via SDK (default)
- * - "presigned" → Store an audit copy in S3 (presigned URL) before Gemini SDK upload
- * Set GEMINI_INPUT_MODE to override; defaults to "upload".
- */
-export const GEMINI_INPUT_MODE = (process.env.GEMINI_INPUT_MODE || "upload").toLowerCase();
-
-// ============================================================================
 // File Paths
 // ============================================================================
 
@@ -327,19 +297,7 @@ export const MAX_PATH_LENGTH = 4096;
  *
  * @security This whitelist prevents uploading malicious file types
  */
-export const ALLOWED_AUDIO_EXTENSIONS = [
-  ".mp3",
-  ".wav",
-  ".flac",
-  ".m4a",
-  ".aac",
-  ".ogg",
-  ".opus",
-  ".wma",
-  ".aiff",
-  ".ape",
-  ".ac3"
-] as const;
+export const ALLOWED_AUDIO_EXTENSIONS = ALLOWED_EXTENSION_CONFIG.audioExtensions;
 
 /**
  * Allowed document template extensions
@@ -347,17 +305,13 @@ export const ALLOWED_AUDIO_EXTENSIONS = [
  *
  * @security This whitelist prevents template injection attacks
  */
-export const ALLOWED_TEMPLATE_EXTENSIONS = [
-  ".docx"
-] as const;
+export const ALLOWED_TEMPLATE_EXTENSIONS = ALLOWED_EXTENSION_CONFIG.templateExtensions;
 
 /**
  * Allowed output document extensions
  * Whitelist of safe document formats for output
  */
-export const ALLOWED_OUTPUT_EXTENSIONS = [
-  ".docx"
-] as const;
+export const ALLOWED_OUTPUT_EXTENSIONS = ALLOWED_EXTENSION_CONFIG.outputExtensions;
 
 // ============================================================================
 // Pricing Constants

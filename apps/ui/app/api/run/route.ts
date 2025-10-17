@@ -86,6 +86,7 @@ export async function POST(req: NextRequest) {
   };
 
   // Kick off the pipeline asynchronously
+  console.log(`[API /api/run] Starting executeRun for ${runId}`);
   void executeRun({
     runId,
     audioPath,
@@ -98,6 +99,7 @@ export async function POST(req: NextRequest) {
     projectRoot,
     signal
   }).catch((error: unknown) => {
+    console.error(`[API /api/run] executeRun error for ${runId}:`, error);
     const sanitized = sanitizeError(error);
     runStore.setStatus(runId, "error", sanitized);
     runStore.appendEvent(runId, "error", {

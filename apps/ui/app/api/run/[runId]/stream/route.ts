@@ -9,10 +9,10 @@ function sseLine(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export async function GET(
+export function GET(
   req: NextRequest,
   { params }: { params: { runId: string } }
-) {
+): Response {
   const runId = params.runId;
 
   if (!runId || typeof runId !== "string") {

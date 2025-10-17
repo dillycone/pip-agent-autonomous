@@ -68,7 +68,6 @@ export interface ValidationResult {
  * These patterns indicate potential path traversal or access to sensitive files
  */
 const DANGEROUS_PATH_PATTERNS = [
-  /\.\./,           // Path traversal (..)
   /\/\.\./,         // Path traversal with slash
   /\.\.\//,         // Path traversal with trailing slash
   /\.\.\\/,         // Windows path traversal
@@ -96,7 +95,10 @@ const BLOCKED_PATHS = [
   "/.ssh/id_rsa",
   "/proc/self/environ",
   "C:\\Windows\\System32",
-  "C:\\Users\\",
+  "C:\\Users\\Public",
+  "C:\\Users\\Default",
+  "C:\\Users\\Default User",
+  "C:\\Users\\All Users"
 ];
 
 /**
@@ -108,6 +110,14 @@ const SHELL_METACHARACTERS = /[;&|`$()\\<>\n\r\x00"']/g;
 // ============================================================================
 // Path Validation Functions
 // ============================================================================
+
+function tolerantDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 /**
  * Detects potential path traversal attempts
@@ -122,13 +132,20 @@ const SHELL_METACHARACTERS = /[;&|`$()\\<>\n\r\x00"']/g;
 export function isPathTraversal(filePath: string): boolean {
   if (!filePath) return false;
 
-  // Check for .. in the path
-  if (filePath.includes("..")) {
+  const normalized = filePath.replace(/\\/g, "/");
+  const decoded = tolerantDecode(normalized);
+
+  const containsTraversalSegment = (candidate: string) =>
+    candidate
+      .split("/")
+      .filter((segment) => segment.length > 0)
+      .some((segment) => segment === "..");
+
+  if (containsTraversalSegment(normalized) || containsTraversalSegment(decoded)) {
     return true;
   }
 
-  // Check for dangerous patterns
-  return DANGEROUS_PATH_PATTERNS.some(pattern => pattern.test(filePath));
+  return DANGEROUS_PATH_PATTERNS.some((pattern) => pattern.test(normalized) || pattern.test(decoded));
 }
 
 /**
@@ -416,22 +433,33 @@ export function validateDirectoryPath(
  * @warning This function should be used with caution. Prefer using
  * argument arrays with spawn() over shell string concatenation.
  *
+ * @deprecated Prefer using {@link safeSpawn} with argument arrays instead of sanitizing shell strings.
+ *
  * @example
  * sanitizeForShellCommand("file.mp3") // "file.mp3"
- * sanitizeForShellCommand("file; rm -rf /") // "file\\; rm -rf /"
+ * sanitizeForShellCommand("file; rm -rf /") // Throws error
  */
 export function sanitizeForShellCommand(arg: string): string {
   if (!arg || typeof arg !== "string") {
     return "";
   }
 
-  const withoutNullBytes = arg.replace(/\x00/g, "");
-
-  if (withoutNullBytes.includes("\n") || withoutNullBytes.includes("\r")) {
+  if (arg.includes("\n") || arg.includes("\r")) {
     throw new Error("Shell argument contains newline characters");
   }
 
-  return withoutNullBytes.replace(/[;&|`$()\\<>"']/g, char => `\\${char}`);
+  if (arg.includes("\x00")) {
+    throw new Error("Shell argument contains null bytes");
+  }
+
+  SHELL_METACHARACTERS.lastIndex = 0;
+  if (SHELL_METACHARACTERS.test(arg)) {
+    throw new Error(
+      "Shell argument contains prohibited characters. Use safeSpawn with argument arrays instead."
+    );
+  }
+
+  return arg;
 }
 
 /**
