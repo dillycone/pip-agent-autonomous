@@ -20,7 +20,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { TextBlock } from "@anthropic-ai/sdk/resources/messages";
+import type { TextBlock, MessageCreateParams, Message } from "@anthropic-ai/sdk/resources/messages";
 import type { UsageMetrics } from "../types/index.js";
 import { createChildLogger } from "../utils/logger.js";
 
@@ -106,7 +106,7 @@ export class AnthropicService implements IAnthropicService {
    * @throws Error if the API call fails or returns empty content
    */
   async generateMessage(params: MessageParams): Promise<{ text: string; usage?: UsageMetrics }> {
-    const requestParams: any = {
+    const requestParams: MessageCreateParams = {
       model: params.model,
       max_tokens: params.maxTokens,
       temperature: params.temperature,
@@ -121,7 +121,7 @@ export class AnthropicService implements IAnthropicService {
 
     // Add extended thinking if specified
     if (params.thinking) {
-      requestParams.thinking = params.thinking;
+      (requestParams as MessageCreateParams & { thinking?: { type: "enabled"; budget_tokens: number } }).thinking = params.thinking;
     }
 
     const response = await this.client.messages.create(requestParams);
@@ -142,7 +142,7 @@ export class AnthropicService implements IAnthropicService {
   }
 
   async generateMessageStream(params: MessageParams, onDelta: (chunk: string) => void): Promise<{ text: string; usage?: UsageMetrics }> {
-    const requestParams: any = {
+    const requestParams: MessageCreateParams = {
       model: params.model,
       max_tokens: params.maxTokens,
       temperature: params.temperature,
@@ -156,11 +156,17 @@ export class AnthropicService implements IAnthropicService {
     };
 
     if (params.thinking) {
-      requestParams.thinking = params.thinking;
+      (requestParams as MessageCreateParams & { thinking?: { type: "enabled"; budget_tokens: number } }).thinking = params.thinking;
     }
 
     const stream = await this.client.messages.stream(requestParams);
-    const streamAny = stream as any;
+
+    interface StreamWithEvents {
+      on?: (event: string, handler: (delta: string) => void) => void;
+      finalMessage?: () => Promise<Message>;
+      finalResponse?: () => Promise<Message>;
+    }
+    const streamAny = stream as StreamWithEvents;
 
     let fullText = "";
 
@@ -168,7 +174,7 @@ export class AnthropicService implements IAnthropicService {
       fullText += delta;
       try {
         onDelta(delta);
-      } catch (error) {
+      } catch (error: unknown) {
         const truncated = delta.length > 200 ? `${delta.slice(0, 200)}…` : delta;
         const serializedError =
           error instanceof Error
@@ -182,14 +188,14 @@ export class AnthropicService implements IAnthropicService {
       }
     });
 
-    const finalMessage: any = typeof streamAny.finalMessage === "function" ? await streamAny.finalMessage() : undefined;
+    const finalMessage: Message | undefined = typeof streamAny.finalMessage === "function" ? await streamAny.finalMessage() : undefined;
     if (!finalMessage) {
       // Fallback to collecting the final response to ensure text availability when available
-      const fallbackResponse: any = typeof streamAny.finalResponse === "function" ? await streamAny.finalResponse() : undefined;
+      const fallbackResponse: Message | undefined = typeof streamAny.finalResponse === "function" ? await streamAny.finalResponse() : undefined;
       if (fallbackResponse && typeof fallbackResponse === "object" && Array.isArray(fallbackResponse.content)) {
         const combined = fallbackResponse.content
-          .filter((block: any) => block?.type === "text" && typeof block.text === "string")
-          .map((block: any) => block.text as string)
+          .filter((block): block is TextBlock => block?.type === "text" && typeof (block as TextBlock).text === "string")
+          .map((block) => block.text)
           .join("");
         if (!fullText) {
           fullText = combined;
@@ -204,8 +210,8 @@ export class AnthropicService implements IAnthropicService {
 
     if (!fullText && Array.isArray(finalMessage.content)) {
       fullText = finalMessage.content
-        .filter((block: any) => block?.type === "text" && typeof block.text === "string")
-        .map((block: any) => block.text as string)
+        .filter((block): block is TextBlock => block?.type === "text" && typeof (block as TextBlock).text === "string")
+        .map((block) => block.text)
         .join("");
     }
 

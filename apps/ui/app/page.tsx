@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import allowedExtensions from "../../../src/config/allowedExtensions.json";
 import styles from "./styles.module.css";
@@ -8,73 +8,13 @@ import PipelineStatusCard from "./components/pipeline/PipelineStatusCard";
 import ErrorAlert from "./components/pipeline/ErrorAlert";
 import CurrentActivityCard from "./components/pipeline/CurrentActivityCard";
 import DocumentOutputCard from "./components/pipeline/DocumentOutputCard";
-import { safeJsonParse, formatDuration, formatDurationMs } from "../lib/utils";
-import type { LogItem, TimelineItem, CostState } from "../lib/types";
+import ProgressRing from "@/app/components/shared/ProgressRing";
+import { formatDuration, formatDurationMs, normalizeUsageMetrics } from "../lib/utils";
+import type { Step, StepStatus, LogItem, TimelineItem, CostState } from "../lib/types";
+import { STEP_ORDER } from "../lib/constants";
+import { usePipelineRun } from "./hooks/usePipelineRun";
+import { computeOverallProgress } from "../lib/pipelineStateReducer";
 import { FileUp, Globe, FileText, FolderOpen, Play } from "lucide-react";
-
-export type Step = "transcribe" | "draft" | "review" | "export";
-export type StepStatus = "pending" | "running" | "success" | "error";
-
-type DraftPreviewStatus = "idle" | "streaming" | "complete";
-
-type DraftUsageState = { model?: string; inputTokens?: number; outputTokens?: number; cacheCreationTokens?: number; cacheReadTokens?: number } | null;
-
-interface StreamState {
-  steps: Record<Step, StepStatus>;
-  chunks: { processed: number; total: number };
-  transcriptPreview: string;
-  transcriptLines: string[];
-  progressMode: "explicit" | "heuristic";
-  draftPreviewLines: string[];
-  draftPreviewStatus: DraftPreviewStatus;
-  draftUsage: DraftUsageState;
-  timeline: TimelineItem[];
-  reviewRounds: Array<{ round: number; approved: boolean; reasons: string[]; requiredChanges: string[]; at?: string }>;
-  finalDraft: string;
-  docxPath: string;
-  docxRelativePath: string;
-  cost: CostState;
-  transcribeStartedAt: number | null;
-  transcribeEndedAt: number | null;
-  uploadStartedAt: number | null;
-  uploadCompletedAt: number | null;
-}
-
-type StreamAction =
-  | { type: "reset" }
-  | { type: "apply"; updater: (state: StreamState) => StreamState };
-
-const createInitialStreamState = (): StreamState => ({
-  steps: { ...defaultSteps },
-  chunks: { processed: 0, total: 0 },
-  transcriptPreview: "",
-  transcriptLines: [],
-  progressMode: "heuristic",
-  draftPreviewLines: [],
-  draftPreviewStatus: "idle",
-  draftUsage: null,
-  timeline: [],
-  reviewRounds: [],
-  finalDraft: "",
-  docxPath: "",
-  docxRelativePath: "",
-  cost: { tokens: 0, usd: 0, breakdown: {} },
-  transcribeStartedAt: null,
-  transcribeEndedAt: null,
-  uploadStartedAt: null,
-  uploadCompletedAt: null
-});
-
-function streamReducer(state: StreamState, action: StreamAction): StreamState {
-  switch (action.type) {
-    case "reset":
-      return createInitialStreamState();
-    case "apply":
-      return action.updater(state);
-    default:
-      return state;
-  }
-}
 
 
 const extensionConfig = (allowedExtensions as {
@@ -92,17 +32,6 @@ function hasAllowedExtension(value: string, allowed: readonly string[]): boolean
   const lower = value.toLowerCase();
   return allowed.some((ext) => lower.endsWith(ext));
 }
-
-const stepOrder: Step[] = ["transcribe", "draft", "review", "export"];
-
-const defaultSteps: Record<Step, StepStatus> = {
-  transcribe: "pending",
-  draft: "pending",
-  review: "pending",
-  export: "pending"
-};
-
-
 
 function formatClock(iso?: string): string {
   if (!iso) return "—";
@@ -166,92 +95,9 @@ function summarizeTranscribeInput(input: unknown): string | null {
 
 
 
-function extractTextPayload(payload: unknown): string | null {
-  if (typeof payload === "string") {
-    return payload;
-  }
-  if (Array.isArray(payload)) {
-    for (const part of payload) {
-      if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-        return (part as { text?: string }).text ?? null;
-      }
-    }
-  }
-  return null;
-}
-
-function normalizeUsageMetrics(raw: unknown): { model?: string; inputTokens?: number; outputTokens?: number; cacheCreationTokens?: number; cacheReadTokens?: number } | null {
-  if (!raw || typeof raw !== "object") return null;
-  const data = raw as Record<string, unknown>;
-  const toNumber = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
-  return {
-    model: typeof data.model === "string" ? data.model : undefined,
-    inputTokens: toNumber(data.input_tokens ?? data.inputTokens),
-    outputTokens: toNumber(data.output_tokens ?? data.outputTokens),
-    cacheCreationTokens: toNumber(data.cache_creation_input_tokens ?? data.cacheCreationTokens),
-    cacheReadTokens: toNumber(data.cache_read_input_tokens ?? data.cacheReadTokens)
-  };
-}
-
-function computeOverallProgress(state: {
-  steps: Record<Step, StepStatus>;
-  chunks: { processed: number; total: number };
-  draftPreviewStatus: DraftPreviewStatus;
-  reviewRounds: Array<{ round: number; approved: boolean; reasons: string[]; requiredChanges: string[]; at?: string }>;
-}): number {
-  // Weighted blend algorithm:
-  // - Transcribe: 50% weight based on chunks processed
-  // - Draft: 25% weight based on streaming status
-  // - Review: 15% weight based on rounds completed (max 4)
-  // - Export: 10% weight based on step status
-
-  // Transcribe progress: 0→50% based on chunks processed
-  const transcribeProgress = (() => {
-    const status = state.steps.transcribe;
-    if (status === "success" || status === "error") return 50;
-    if (status === "running") {
-      if (!state.chunks.total || state.chunks.total <= 0) return 0;
-      const ratio = state.chunks.processed / state.chunks.total;
-      return Math.min(50, Math.round(ratio * 50));
-    }
-    return 0;
-  })();
-
-  // Draft progress: 0→25% based on streaming status
-  const draftProgress = (() => {
-    const status = state.steps.draft;
-    if (status === "success" || status === "error") return 25;
-    if (status === "running") {
-      if (state.draftPreviewStatus === "streaming") return 20;
-      if (state.draftPreviewStatus === "complete") return 25;
-      return 10;
-    }
-    return 0;
-  })();
-
-  // Review progress: 0→15% based on rounds completed (max 4 rounds)
-  const reviewProgress = (() => {
-    const status = state.steps.review;
-    if (status === "success" || status === "error") return 15;
-    if (status === "running") {
-      const roundCount = Math.min(state.reviewRounds.length, 4);
-      return Math.round((roundCount / 4) * 15);
-    }
-    return 0;
-  })();
-
-  // Export progress: 0→10%
-  const exportProgress = (() => {
-    const status = state.steps.export;
-    if (status === "success" || status === "error") return 10;
-    if (status === "running") return 5;
-    return 0;
-  })();
-
-  return Math.round(transcribeProgress + draftProgress + reviewProgress + exportProgress);
-}
 
 export default function Page() {
+  // Form state
   const [audio, setAudio] = useState("uploads/meeting.mp3");
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [inLang, setInLang] = useState("Auto");
@@ -260,10 +106,39 @@ export default function Page() {
   const [outdoc, setOutdoc] = useState(() => `exports/pip-${Date.now()}.docx`);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
 
-  const [running, setRunning] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
+  // UI state
   const [transcribeElapsedSeconds, setTranscribeElapsedSeconds] = useState(0);
-  const [streamState, dispatchStream] = useReducer(streamReducer, undefined, createInitialStreamState);
+  const [focusedStep, setFocusedStep] = useState<Step | null>(null);
+  const [logs, setLogs] = useState<LogItem[]>([]);
+  const [toasts, setToasts] = useState<Array<{ id: string; text: string; level: "info" | "warn" | "error" | "success" }>>([]);
+
+  // Logging helpers
+  const pushLog = useCallback((type: string, payload: unknown) => {
+    setLogs((prev) => [...prev, { ts: Date.now(), type, payload }].slice(-5000));
+  }, []);
+
+  const pushToast = useCallback((text: string, level: "info" | "warn" | "error" | "success" = "info") => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setToasts((prev) => [...prev, { id, text, level }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  }, []);
+
+  // Pipeline run hook
+  const {
+    state: pipelineState,
+    runId,
+    isRunning,
+    startRun: startPipelineRun,
+    abortRun,
+    resetState: resetPipelineState,
+  } = usePipelineRun({
+    onLog: pushLog,
+    onToast: pushToast,
+  });
+
+  // Destructure pipeline state for easier access
   const {
     steps,
     chunks,
@@ -282,68 +157,8 @@ export default function Page() {
     transcribeStartedAt,
     transcribeEndedAt,
     uploadStartedAt,
-    uploadCompletedAt
-  } = streamState;
-  const [focusedStep, setFocusedStep] = useState<Step | null>(null);
-  const draftStreamBufferRef = useRef("");
-  const [logs, setLogs] = useState<LogItem[]>([]);
-  const draftPreviewChunksRef = useRef(false);
-
-  const updateStreamState = useCallback(
-    (updater: (state: StreamState) => StreamState) => {
-      dispatchStream({ type: "apply", updater });
-    },
-    []
-  );
-
-  const [toasts, setToasts] = useState<Array<{ id: string; text: string; level: "info" | "warn" | "error" | "success" }>>([]);
-
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const eventSourceListenersRef = useRef<Array<{ source: EventSource; type: string; listener: EventListenerOrEventListenerObject }>>([]);
-
-  const detachEventSourceListeners = useCallback((source: EventSource | null) => {
-    if (!source) return;
-    eventSourceListenersRef.current = eventSourceListenersRef.current.filter((entry) => {
-      if (entry.source !== source) return true;
-      source.removeEventListener(entry.type, entry.listener);
-      return false;
-    });
-  }, []);
-
-  const trackEventSourceListener = useCallback(
-    (source: EventSource, type: string, listener: any) => {
-      source.addEventListener(type, listener);
-      eventSourceListenersRef.current.push({ source, type, listener });
-    },
-    []
-  );
-
-  const closeEventSource = useCallback((source: EventSource | null) => {
-    if (!source) return;
-    detachEventSourceListeners(source);
-    if (source.readyState !== EventSource.CLOSED) {
-      source.close();
-    }
-  }, [detachEventSourceListeners]);
-
-  useEffect(() => {
-    return () => {
-      closeEventSource(eventSourceRef.current);
-      eventSourceRef.current = null;
-    };
-  }, [closeEventSource]);
-
-  const pushLog = useCallback((type: string, payload: unknown) => {
-    setLogs((prev) => [...prev, { ts: Date.now(), type, payload }].slice(-5000));
-  }, []);
-
-  const pushToast = useCallback((text: string, level: "info" | "warn" | "error" | "success" = "info") => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev, { id, text, level }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
-  }, []);
+    uploadCompletedAt,
+  } = pipelineState;
 
   const handleAudioFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -407,32 +222,14 @@ export default function Page() {
   }, [audio, template, outdoc]);
 
   const resetState = useCallback(() => {
-    dispatchStream({ type: "reset" });
+    resetPipelineState();
     setFocusedStep(null);
-    draftStreamBufferRef.current = "";
-    draftPreviewChunksRef.current = false;
     setLogs([]);
     setTranscribeElapsedSeconds(0);
-    setRunId(null);
-  }, [dispatchStream, setTranscribeElapsedSeconds]);
-
-  const handleStreamError = useCallback((payload: unknown) => {
-    pushLog("error", payload ?? "Stream error");
-    setRunning(false);
-    setRunId(null);
-    updateStreamState((prev) => {
-      const nextSteps: Record<Step, StepStatus> = { ...prev.steps };
-      (Object.keys(nextSteps) as Step[]).forEach((step) => {
-        if (nextSteps[step] === "running") {
-          nextSteps[step] = "error";
-        }
-      });
-      return { ...prev, steps: nextSteps };
-    });
-  }, [pushLog, updateStreamState]);
+  }, [resetPipelineState]);
 
   const startRun = useCallback(async () => {
-    if (running) return;
+    if (isRunning) return;
 
     const validationErrors = validateFormInputs();
     if (validationErrors.length > 0) {
@@ -441,500 +238,29 @@ export default function Page() {
       return;
     }
 
-    closeEventSource(eventSourceRef.current);
-    resetState();
-    setRunning(true);
-
-    try {
-      const response = await fetch("/api/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audio,
-          template,
-          outdoc,
-          inputLanguage: inLang,
-          outputLanguage: outLang
-        })
-      });
-
-      const payload = await response.json().catch(() => null) as { runId?: string } | { error?: string; details?: unknown } | null;
-
-      if (!response.ok || !payload || typeof (payload as any).runId !== "string") {
-        const message = typeof (payload as any)?.error === "string"
-          ? (payload as any).error
-          : `Run request failed (${response.status})`;
-        pushToast(message, "error");
-        pushLog("error", payload ?? message);
-        setRunning(false);
-        return;
-      }
-
-      const { runId: newRunId } = payload as { runId: string };
-      setRunId(newRunId);
-      pushLog("run", payload);
-
-      const es = new EventSource(`/api/run/${encodeURIComponent(newRunId)}/stream`);
-      eventSourceRef.current = es;
-
-      trackEventSourceListener(es, "status", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ step?: Step; status?: StepStatus; meta?: Record<string, unknown>; at?: string }>(event.data) ?? {};
-        const step = data.step as Step | undefined;
-        const status = data.status as StepStatus | undefined;
-        if (step && status) {
-          updateStreamState((prev) => {
-            const nextSteps: Record<Step, StepStatus> = { ...prev.steps, [step]: status };
-            let nextState: StreamState = { ...prev, steps: nextSteps };
-
-            if (status === "running") {
-              if (step === "transcribe") {
-                const now = Date.now();
-                nextState = {
-                  ...nextState,
-                  transcriptLines: [],
-                  transcriptPreview: "",
-                  chunks: { processed: 0, total: 0 },
-                  transcribeStartedAt: prev.transcribeStartedAt ?? now,
-                  transcribeEndedAt: null,
-                  uploadStartedAt: prev.uploadStartedAt ?? now
-                };
-              }
-              if (step === "draft") {
-                nextState = {
-                  ...nextState,
-                  draftPreviewStatus: "streaming",
-                  draftPreviewLines: [],
-                  draftUsage: null
-                };
-              }
-              if (step === "review") {
-                nextState = { ...nextState, reviewRounds: [] };
-              }
-            }
-
-            if ((status === "success" || status === "error") && step === "draft") {
-              nextState = { ...nextState, draftPreviewStatus: "complete" };
-            }
-
-            if (step === "transcribe") {
-              if (status === "running") {
-                const now = Date.now();
-                nextState = {
-                  ...nextState,
-                  transcribeStartedAt: prev.transcribeStartedAt ?? now,
-                  transcribeEndedAt: null,
-                  uploadStartedAt: prev.uploadStartedAt ?? now
-                };
-              } else if (status === "success" || status === "error") {
-                const now = Date.now();
-                nextState = {
-                  ...nextState,
-                  transcribeEndedAt: prev.transcribeEndedAt ?? now,
-                  uploadCompletedAt: prev.uploadCompletedAt ?? now
-                };
-              }
-            }
-
-            return nextState;
-          });
-
-          if (status === "running" && step === "draft") {
-            draftStreamBufferRef.current = "";
-            draftPreviewChunksRef.current = false;
-          }
-
-          if (status === "running") pushToast(`${capitalize(step)} started`, "info");
-          if (status === "success") pushToast(`${capitalize(step)} complete`, "success");
-          if (status === "error") pushToast(`${capitalize(step)} error`, "error");
-        }
-        pushLog("status", data);
-      });
-
-      trackEventSourceListener(es, "tool_use", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ id?: string; name?: string; startedAt?: string; inputSummary?: unknown }>(event.data) ?? {};
-        if (data?.id && data?.name) {
-          const phase: Step | "unknown" = data.name.includes("gemini-transcriber")
-            ? "transcribe"
-            : data.name.includes("pip-generator")
-              ? "draft"
-              : data.name.includes("docx-exporter")
-                ? "export"
-                : "unknown";
-          updateStreamState((prev) => {
-            const nextTimeline = [
-              ...prev.timeline,
-              { id: data.id!, name: data.name!, phase, status: "running" as StepStatus, startedAt: data.startedAt, inputSummary: data.inputSummary }
-            ];
-            if (nextTimeline.length > 500) {
-              nextTimeline.splice(0, nextTimeline.length - 500);
-            }
-            return { ...prev, timeline: nextTimeline };
-          });
-        }
-        pushLog("tool_use", data);
-      });
-
-      trackEventSourceListener(es, "tool_result", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ id?: string; name?: string; isError?: boolean; content?: unknown; finishedAt?: string; durationMs?: number }>(event.data) ?? {};
-        const isPipGenerator = Boolean(data?.name?.includes("pip-generator"));
-        const textPayload = isPipGenerator ? extractTextPayload(data.content) : null;
-        const parsedPayload = isPipGenerator ? safeJsonParse<{ draft?: string; usage?: unknown; model?: unknown }>(textPayload ?? null) : null;
-        const normalizedUsage = parsedPayload?.usage || parsedPayload?.model ? normalizeUsageMetrics(parsedPayload?.usage) : null;
-
-        updateStreamState((prev) => {
-          let nextState: StreamState = { ...prev };
-
-          if (data?.id) {
-            nextState.timeline = prev.timeline.map((t) =>
-              t.id === data.id
-                ? {
-                    ...t,
-                    status: data.isError ? "error" : "success",
-                    isError: data.isError,
-                    finishedAt: data.finishedAt,
-                    durationMs: data.durationMs,
-                    contentSummary: data.content
-                  }
-                : t
-            );
-          }
-
-          if (isPipGenerator) {
-            if (data?.isError) {
-              nextState.draftPreviewStatus = "complete";
-            }
-            if (parsedPayload?.usage || parsedPayload?.model) {
-              nextState.draftUsage = {
-                model: typeof parsedPayload?.model === "string" ? parsedPayload.model : normalizedUsage?.model,
-                inputTokens: normalizedUsage?.inputTokens,
-                outputTokens: normalizedUsage?.outputTokens,
-                cacheCreationTokens: normalizedUsage?.cacheCreationTokens,
-                cacheReadTokens: normalizedUsage?.cacheReadTokens
-              };
-            }
-            if (parsedPayload?.draft && !draftPreviewChunksRef.current) {
-              const fallbackLines = parsedPayload.draft
-                .split(/\r?\n/)
-                .map((line) => line.trim())
-                .filter((line): line is string => line.length > 0)
-                .slice(0, 3);
-              if (fallbackLines.length > 0) {
-                nextState.draftPreviewLines = fallbackLines;
-                nextState.draftPreviewStatus = "complete";
-              }
-            }
-          }
-
-          return nextState;
-        });
-
-        if (data?.isError) pushToast(`Tool error: ${data.name ?? data.id}`, "error");
-        pushLog("tool_result", data);
-      });
-
-      trackEventSourceListener(es, "draft_stream_reset", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ at?: string }>(event.data);
-        draftPreviewChunksRef.current = true;
-        draftStreamBufferRef.current = "";
-        updateStreamState((prev) => ({
-          ...prev,
-          draftPreviewStatus: "streaming",
-          draftPreviewLines: []
-        }));
-      });
-
-      trackEventSourceListener(es, "draft_stream_delta", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ text?: string; seq?: number; length?: number; at?: string }>(event.data);
-        if (typeof data?.text === "string" && data.text.length > 0) {
-          draftPreviewChunksRef.current = true;
-          const combined = `${draftStreamBufferRef.current}${data.text}`;
-          draftStreamBufferRef.current = combined.length > 12000 ? combined.slice(-12000) : combined;
-          const trailing = draftStreamBufferRef.current
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter((line): line is string => line.length > 0)
-            .slice(-3);
-          updateStreamState((prev) => ({
-            ...prev,
-            draftPreviewStatus: "streaming",
-            draftPreviewLines: trailing
-          }));
-        }
-      });
-
-      trackEventSourceListener(es, "draft_stream_complete", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ total?: number; chunks?: number; at?: string }>(event.data);
-        if (data) {
-          draftPreviewChunksRef.current = true;
-          updateStreamState((prev) => ({
-            ...prev,
-            draftPreviewStatus: "complete"
-          }));
-        }
-      });
-
-      trackEventSourceListener(es, "draft_preview_chunk", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ text?: string; index?: number; total?: number; at?: string }>(event.data);
-        if (data?.text) {
-          draftPreviewChunksRef.current = true;
-          updateStreamState((prev) => {
-            const nextLines = [...prev.draftPreviewLines];
-            const text = data.text!; // Safe to assert since we checked above
-            if (typeof data.index === "number" && data.index >= 0) {
-              nextLines[data.index] = text;
-            } else {
-              nextLines.push(text);
-            }
-            const filtered = nextLines
-              .filter((line): line is string => typeof line === "string" && line.length > 0)
-              .slice(-3);
-            return {
-              ...prev,
-              draftPreviewStatus: "streaming",
-              draftPreviewLines: filtered
-            };
-          });
-        }
-      });
-
-      trackEventSourceListener(es, "draft_preview_complete", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ total?: number; at?: string }>(event.data);
-        if (data) {
-          updateStreamState((prev) => ({
-            ...prev,
-            draftPreviewStatus: "complete"
-          }));
-        }
-      });
-
-      trackEventSourceListener(es, "judge_round", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ approved?: boolean; reasons?: string[]; required_changes?: string[]; revised_draft?: string | null; round?: number; at?: string }>(event.data);
-        if (typeof data?.round === "number") {
-          updateStreamState((prev) => {
-            const round = data.round!; // Safe to assert since we checked type above
-            const filtered = prev.reviewRounds.filter((item) => item.round !== round);
-            const next = [
-              ...filtered,
-              {
-                round,
-                approved: Boolean(data.approved),
-                reasons: Array.isArray(data.reasons) ? data.reasons.filter((r): r is string => typeof r === "string" && r.trim().length > 0) : [],
-                requiredChanges: Array.isArray(data.required_changes) ? data.required_changes.filter((r): r is string => typeof r === "string" && r.trim().length > 0) : [],
-                at: data.at
-              }
-            ]
-              .sort((a, b) => a.round - b.round)
-              .slice(-4);
-            return { ...prev, reviewRounds: next };
-          });
-        }
-      });
-
-      trackEventSourceListener(es, "todo", (event: MessageEvent<string>) => {
-        const data = safeJsonParse(event.data) ?? {};
-        pushLog("todo", data);
-      });
-
-      trackEventSourceListener(es, "transcript_chunk", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ transcript?: string; processedChunks?: number; totalChunks?: number; at?: string; meta?: { progressMode?: "explicit" | "heuristic" } }>(event.data);
-        if (data) {
-          updateStreamState((prev) => {
-            let processed = prev.chunks.processed;
-            let total = prev.chunks.total;
-
-            if (typeof data.processedChunks === "number" && Number.isFinite(data.processedChunks)) {
-              processed = Math.max(processed, data.processedChunks);
-            }
-            if ((!processed || processed <= 0) && typeof data.transcript === "string" && data.transcript.trim()) {
-              processed = Math.max(processed, 1);
-            }
-
-            if (typeof data.totalChunks === "number" && Number.isFinite(data.totalChunks)) {
-              total = Math.max(total, data.totalChunks);
-            }
-            if ((!total || total <= 0) && processed && processed > 0) {
-              total = processed;
-            }
-
-            if (!Number.isFinite(processed) || processed < 0) processed = 0;
-            if (!Number.isFinite(total) || total < 0) total = 0;
-
-            let transcriptPreview = prev.transcriptPreview;
-            let transcriptLines = prev.transcriptLines;
-
-            if (typeof data.transcript === "string" && data.transcript.trim()) {
-              transcriptPreview = data.transcript;
-              transcriptLines = data.transcript
-                .split(/\r?\n/)
-                .map((line) => line.trim())
-                .filter((line): line is string => line.length > 0)
-                .slice(-3);
-            }
-
-            const metaMode = data.meta?.progressMode;
-            const nextProgressMode: "explicit" | "heuristic" =
-              metaMode === "explicit" || metaMode === "heuristic" ? metaMode : prev.progressMode;
-
-            return {
-              ...prev,
-              transcriptPreview,
-              transcriptLines,
-              chunks: { processed, total },
-              progressMode: nextProgressMode,
-              uploadCompletedAt: prev.uploadCompletedAt ?? Date.now()
-            };
-          });
-          pushLog("transcript_chunk", data);
-        }
-      });
-
-      trackEventSourceListener(es, "cost", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ summary?: { totalTokens?: number; estimatedCostUSD?: number; breakdown?: Record<string, unknown> } }>(event.data);
-        if (data?.summary) {
-          updateStreamState((prev) => ({
-            ...prev,
-            cost: {
-              tokens: data.summary?.totalTokens ?? 0,
-              usd: data.summary?.estimatedCostUSD ?? 0,
-              breakdown: data.summary?.breakdown ?? {}
-            }
-          }));
-        }
-      });
-
-      trackEventSourceListener(es, "final", (event: MessageEvent<string>) => {
-        const data = safeJsonParse<{ ok?: boolean; draft?: string; docx?: string; docxRelative?: string; at?: string }>(event.data);
-        if (data?.ok) {
-          const finalText = data.draft ?? "";
-          const hasContent = finalText.trim().length > 0;
-          updateStreamState((prev) => {
-            let nextState: StreamState = {
-              ...prev,
-              finalDraft: finalText,
-              docxPath: data.docx ?? "",
-              docxRelativePath: data.docxRelative ?? ""
-            };
-            if (hasContent) {
-              const trailing = finalText
-                .split(/\r?\n/)
-                .map((line) => line.trim())
-                .filter((line): line is string => line.length > 0)
-                .slice(-3);
-              nextState = {
-                ...nextState,
-                draftPreviewLines: trailing,
-                draftPreviewStatus: "complete"
-              };
-            }
-            return nextState;
-          });
-          if (hasContent) {
-            draftStreamBufferRef.current = finalText;
-          }
-          pushLog("final", data);
-          pushToast("Export complete", "success");
-        }
-        setRunning(false);
-        closeEventSource(es);
-        if (eventSourceRef.current === es) {
-          eventSourceRef.current = null;
-        }
-      });
-
-      trackEventSourceListener(es, "error", (event: MessageEvent<string>) => {
-        const data = event.data;
-        const parsed = safeJsonParse(data ?? null);
-        handleStreamError(parsed ?? data ?? null);
-        closeEventSource(es);
-        if (eventSourceRef.current === es) {
-          eventSourceRef.current = null;
-        }
-      });
-
-      es.onerror = async (_event: Event) => {
-        if (!runId) {
-          pushLog("resync-error", "Run ID unavailable, cannot resync connection");
-          pushToast("Connection lost and run ID missing; cannot resync.", "error");
-          return;
-        }
-
-        pushLog("stream-error", "Connection lost, attempting resync...");
-        pushToast("Connection lost, resyncing…", "warn");
-
-        try {
-          const response = await fetch(`/api/run/${encodeURIComponent(runId)}/stream`);
-
-          if (!response.ok) {
-            throw new Error(`Resync failed: ${response.status}`);
-          }
-
-          const stateResponse = await fetch(
-            `/api/run/${encodeURIComponent(runId)}/state`
-          ).catch(() => null);
-
-          if (stateResponse?.ok) {
-            const stateSnapshot = await stateResponse.json().catch(() => null);
-            if (stateSnapshot) {
-              updateStreamState((prev) => ({
-                ...prev,
-                ...stateSnapshot
-              }));
-              pushLog("resync", "State restored from server");
-              pushToast("Reconnected and synced", "success");
-            }
-          }
-
-          closeEventSource(es);
-          const newEs = new EventSource(
-            `/api/run/${encodeURIComponent(runId)}/stream`
-          );
-          eventSourceRef.current = newEs;
-
-          // Re-attach all listeners to new connection
-          // (This is simplified - in production you'd want to refactor this)
-          pushLog("resync", "New connection established");
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          pushLog("resync-error", message);
-          handleStreamError({ error: message, context: "resync" });
-        }
-      };
-
-      pushLog("info", `Stream opened for run ${newRunId}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      pushToast(`Run failed: ${message}`, "error");
-      pushLog("error", message);
-      setRunning(false);
-    }
-  }, [audio, handleStreamError, inLang, outLang, outdoc, pushLog, pushToast, resetState, running, template, validateFormInputs, closeEventSource, trackEventSourceListener, runId, updateStreamState]);
+    await startPipelineRun({
+      audio,
+      template,
+      outdoc,
+      inputLanguage: inLang,
+      outputLanguage: outLang,
+    });
+  }, [
+    isRunning,
+    validateFormInputs,
+    pushToast,
+    pushLog,
+    startPipelineRun,
+    audio,
+    template,
+    outdoc,
+    inLang,
+    outLang,
+  ]);
 
   const handleCancelRun = useCallback(async () => {
-    if (!runId) {
-      pushToast("No active run to cancel", "warn");
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `/api/run/${encodeURIComponent(runId)}/abort`,
-        { method: "POST" }
-      );
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unknown error" }));
-        pushToast(`Cancel failed: ${error.error || response.statusText}`, "error");
-        return;
-      }
-
-      pushToast("Run cancelled", "success");
-      pushLog("cancel", { runId });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      pushToast(`Cancel error: ${message}`, "error");
-      pushLog("cancel_error", message);
-    }
-  }, [runId, pushToast, pushLog]);
+    await abortRun();
+  }, [abortRun]);
 
   const handleRetryRun = useCallback(() => {
     resetState();
@@ -981,9 +307,9 @@ export default function Page() {
   }, [chunks, transcribeElapsedSeconds, transcribeStartedAt, transcribeEndedAt]);
 
   const autoStep = useMemo<Step>(() => {
-    const runningStep = stepOrder.find((key) => steps[key] === "running");
+    const runningStep = STEP_ORDER.find((key) => steps[key] === "running");
     if (runningStep) return runningStep;
-    const completed = [...stepOrder].reverse().find((key) => steps[key] === "success" || steps[key] === "error");
+    const completed = [...STEP_ORDER].reverse().find((key) => steps[key] === "success" || steps[key] === "error");
     if (completed) return completed;
     return "transcribe";
   }, [steps]);
@@ -1092,18 +418,18 @@ export default function Page() {
         {/* Start Button */}
         <button
           onClick={startRun}
-          disabled={running}
+          disabled={isRunning}
           className={styles.configButton}
         >
           <Play size={18} />
-          {running ? "Running…" : "Start Run"}
+          {isRunning ? "Running…" : "Start Run"}
         </button>
       </section>
 
-      {running && (
+      {isRunning && (
         <div className="space-y-4 mb-6">
           <PipelineStatusCard
-            overallProgress={computeOverallProgress(streamState)}
+            overallProgress={computeOverallProgress(pipelineState)}
             currentStep={autoStep}
             steps={steps}
             elapsedSeconds={transcribeElapsedSeconds}
@@ -1140,7 +466,7 @@ export default function Page() {
         </div>
       )}
 
-      {running && (
+      {isRunning && (
         <section className="max-w-4xl mx-auto px-4 py-6 space-y-4">
           <CurrentActivityCard
             step={autoStep}
@@ -1157,7 +483,7 @@ export default function Page() {
             docxPath={docxPath}
             docxRelativePath={docxRelativePath}
             isReady={Boolean(docxPath || docxRelativePath)}
-            running={running}
+            running={isRunning}
           />
         </section>
       )}
@@ -1741,27 +1067,6 @@ function Artifacts({ finalDraft, docxPath, docxRelative }: ArtifactsProps) {
 function capitalize(value: string): string {
   if (!value) return value;
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function ProgressRing({ percent, label }: { percent?: number; label?: string }) {
-  const hasValue = typeof percent === "number" && Number.isFinite(percent);
-  const p = hasValue ? Math.max(0, Math.min(100, percent)) : 0;
-  const progressColor = "var(--ring-progress-color, #22c55e)";
-  const trackColor = "var(--ring-track-color, #e5e7eb)";
-  const bg = `conic-gradient(${progressColor} ${p * 3.6}deg, ${trackColor} 0)`;
-  return (
-    <div
-      className={styles.ring}
-      style={{ backgroundImage: bg }}
-      aria-label={hasValue ? `Progress ${p}%` : "Progress unavailable"}
-      role="img"
-    >
-      <div className={styles.ringInner}>
-        {hasValue ? `${p}%` : "—"}
-        {label ? <div className={styles.ringSub}>{label}</div> : null}
-      </div>
-    </div>
-  );
 }
 
 function Toasts({ toasts, onClose }: { toasts: Array<{ id: string; text: string; level: string }>; onClose: (id: string) => void }) {

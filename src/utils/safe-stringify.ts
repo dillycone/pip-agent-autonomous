@@ -2,29 +2,8 @@
  * Safe JSON stringification utilities that handle circular references and redact sensitive data.
  */
 
-import { SENSITIVE_FIELD_PATTERNS } from "./sanitize.js";
-
-const SENSITIVE_KEYS = new Set([
-  "password",
-  "apiKey",
-  "api_key",
-  "token",
-  "secret",
-  "authorization",
-  "auth",
-  "bearer",
-  "credential",
-  "apikey",
-  "accessToken",
-  "access_token",
-  "refreshToken",
-  "refresh_token",
-  "privateKey",
-  "private_key",
-  "client_secret",
-  "id_token",
-  "bearertoken"
-].map(key => key.toLowerCase()));
+import { isSensitiveField } from "./sensitive-data.js";
+import { MAX_STRING_LENGTH } from "../constants/limits.js";
 
 const REDACTED = "[REDACTED]";
 const CIRCULAR = "[Circular Reference]";
@@ -35,7 +14,7 @@ const CIRCULAR = "[Circular Reference]";
  * @param maxLength - Maximum length of the output string (default: 10000)
  * @returns A safe JSON string
  */
-export function safeStringify(obj: unknown, maxLength: number = 10000): string {
+export function safeStringify(obj: unknown, maxLength: number = MAX_STRING_LENGTH): string {
   try {
     const seen = new WeakSet();
 
@@ -84,7 +63,7 @@ export function safeStringify(obj: unknown, maxLength: number = 10000): string {
     }
 
     return json;
-  } catch (error) {
+  } catch (error: unknown) {
     // Fallback for non-serializable objects
     return `[Failed to stringify: ${error instanceof Error ? error.message : String(error)}]`;
   }
@@ -173,9 +152,5 @@ function sanitizeObject(obj: unknown, maxDepth: number = 2): unknown {
 }
 
 function isSensitiveKey(key: string): boolean {
-  const lower = key.toLowerCase();
-  if (SENSITIVE_KEYS.has(lower)) {
-    return true;
-  }
-  return SENSITIVE_FIELD_PATTERNS.some(pattern => pattern.test(key));
+  return isSensitiveField(key);
 }

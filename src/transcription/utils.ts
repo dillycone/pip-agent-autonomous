@@ -1,11 +1,15 @@
 import type { GeminiRawSegment } from "../types/index.js";
 import { TranscriptionError } from "../errors/index.js";
+import { normalizeUsageMetadata, type NormalizedUsage } from "../utils/usage-normalization.js";
 
 export type GeminiTokenUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
 };
+
+// Re-export for backward compatibility
+export type { NormalizedUsage };
 
 export type NormalizedSegment = {
   start: string | null;
@@ -28,78 +32,12 @@ export function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Extract token usage from metadata using the normalized utility.
+ * @deprecated Use normalizeUsageMetadata from utils/usage-normalization.ts directly
+ */
 export function extractTokenUsageFromMetadata(metadata?: Record<string, unknown> | null): GeminiTokenUsage | null {
-  if (!metadata || typeof metadata !== "object") {
-    return null;
-  }
-
-  const toNumber = (value: unknown): number | null => {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string" && value.trim() !== "") {
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-  };
-
-  const raw = metadata as Record<string, unknown>;
-
-  const input =
-    toNumber(raw.promptTokenCount) ??
-    toNumber(raw.prompt_token_count) ??
-    toNumber(raw.inputTokenCount) ??
-    toNumber(raw.input_token_count) ??
-    toNumber(raw.promptTokens) ??
-    toNumber(raw.inputTokens);
-
-  const output =
-    toNumber(raw.candidatesTokenCount) ??
-    toNumber(raw.candidates_token_count) ??
-    toNumber(raw.outputTokenCount) ??
-    toNumber(raw.output_token_count) ??
-    toNumber(raw.responseTokenCount) ??
-    toNumber(raw.response_token_count) ??
-    toNumber(raw.candidatesTokens) ??
-    toNumber(raw.outputTokens) ??
-    toNumber(raw.responseTokens);
-
-  const total =
-    toNumber(raw.totalTokenCount) ??
-    toNumber(raw.total_token_count) ??
-    toNumber(raw.totalTokens);
-
-  if (input === null && output === null && total === null) {
-    return null;
-  }
-
-  const inputTokens = input ?? 0;
-  const outputTokens = output ?? 0;
-  const totalTokens = total ?? inputTokens + outputTokens;
-
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens
-  };
-}
-
-export function addTokenUsageTotals(
-  current: GeminiTokenUsage | null,
-  addition: GeminiTokenUsage | null
-): GeminiTokenUsage | null {
-  if (!addition) {
-    return current;
-  }
-  if (!current) {
-    return { ...addition };
-  }
-  return {
-    inputTokens: current.inputTokens + addition.inputTokens,
-    outputTokens: current.outputTokens + addition.outputTokens,
-    totalTokens: current.totalTokens + addition.totalTokens
-  };
+  return normalizeUsageMetadata(metadata);
 }
 
 export function hasTimeoutSignal(value: unknown, seen: WeakSet<object> = new WeakSet()): boolean {
@@ -167,35 +105,6 @@ export function isTimeoutLikeError(error: unknown): boolean {
   }
 
   return hasTimeoutSignal(error);
-}
-
-export function isFileTooLargeError(error: unknown): boolean {
-  if (error === null || error === undefined) {
-    return false;
-  }
-
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    if (
-      message.includes("too large") ||
-      message.includes("file size") ||
-      message.includes("exceeds maximum") ||
-      message.includes("request entity too large") ||
-      message.includes("payload too large")
-    ) {
-      return true;
-    }
-  }
-
-  if (typeof error === "object") {
-    const obj = error as Record<string, unknown>;
-    const status = obj.status || obj.statusCode || obj.code;
-    if (status === 413 || status === "413") {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 export function toSeconds(value: string | number | null | undefined): number | null {

@@ -64,11 +64,12 @@ import { PROJECT_ROOT } from "./utils/paths.js";
 import { runPipeline } from "./pipeline/runPipeline.js";
 import type { PipelineHandlers } from "./pipeline/runPipeline.js";
 import type { RunStatus } from "./server/runStore.js";
+import { MCP_REQUEST_TIMEOUT } from "./constants/timeouts.js";
 
 // Ensure long-running MCP tool calls (Gemini transcription, Claude drafting) have ample time.
 // The Anthropic SDK reads this value when handling MCP requests.
 if (!process.env.MCP_REQUEST_TIMEOUT_MS) {
-  process.env.MCP_REQUEST_TIMEOUT_MS = String(10 * 60 * 1000); // 10 minutes default for long-running MCP calls
+  process.env.MCP_REQUEST_TIMEOUT_MS = String(MCP_REQUEST_TIMEOUT); // 10 minutes default for long-running MCP calls
 }
 
 import type { CostSummary } from "./types/index.js";
@@ -282,8 +283,16 @@ async function run() {
             const sanitizedContent = sanitizeForLogging(payload.content);
             logger.warn({ toolName: payload.name, error: sanitizedContent }, `  ⚠️  Tool ${payload.name ?? "unknown"} returned error`);
             logger.warn(`     ${safeStringify(sanitizedContent, 200)}`);
+
+            interface ContentBlock {
+              text?: string;
+              [key: string]: unknown;
+            }
+
             const rawText = Array.isArray(payload.content)
-              ? payload.content.find((part: any) => typeof part?.text === "string")?.text
+              ? payload.content.find((part: unknown): part is ContentBlock => {
+                  return typeof part === "object" && part !== null && typeof (part as ContentBlock).text === "string";
+                })?.text
               : typeof payload.content === "string"
                 ? payload.content
                 : null;
@@ -440,7 +449,7 @@ async function run() {
   }
 }
 
-run().catch(err => {
+run().catch((err: unknown) => {
   handleError(err, "pipeline execution");
   process.exit(1);
 });

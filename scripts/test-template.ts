@@ -1,6 +1,37 @@
 /**
- * Quick test to verify the template works with docxtemplater
- * Run with: npx tsx scripts/test-template.ts
+ * @file test-template.ts
+ * @description Tests the PIP template by rendering it with docxtemplater and sample data.
+ * Verifies that all placeholders are correctly formatted and can be replaced at runtime.
+ *
+ * @usage
+ * Run from project root:
+ * ```bash
+ * npx tsx scripts/test-template.ts
+ * ```
+ *
+ * @input
+ * - File: templates/pip-template.docx (created by create-template.ts)
+ *
+ * @output
+ * - File: exports/template-test.docx
+ * - Contains rendered test data to verify template works correctly
+ *
+ * @verification
+ * This script validates:
+ * 1. All placeholders ({title}, {date}, {pip_body}, {language}) are present
+ * 2. docxtemplater can successfully parse the template
+ * 3. Content replacement works correctly
+ * 4. The output DOCX file is valid and can be opened
+ *
+ * @notes
+ * - Run create-template.ts first if template doesn't exist
+ * - Test data includes multi-paragraph content and bullet points
+ * - Output file can be inspected manually to verify formatting
+ * - The exports/ directory is created automatically if missing
+ *
+ * @see scripts/create-template.ts - Create the template
+ * @see scripts/README.md - Full documentation
+ * @see src/mcp/docxExporter.ts - Production template rendering code
  */
 
 import PizZip from "pizzip";
@@ -53,9 +84,9 @@ async function testTemplate() {
   console.log(`   open ${outputPath}`);
 }
 
-testTemplate().catch((error) => {
+testTemplate().catch((error: unknown) => {
   console.error("\n❌ Template test failed:", error);
-  if (error.properties) {
+  if (error && typeof error === "object" && "properties" in error) {
     console.error("Error details:", JSON.stringify(error.properties, null, 2));
   }
   process.exit(1);

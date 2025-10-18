@@ -1,6 +1,32 @@
 /**
- * Script to create a proper PIP template with {pip_body} placeholder
- * Run with: npx tsx scripts/create-template.ts
+ * @file create-template.ts
+ * @description Creates a professional DOCX template for Performance Improvement Plans (PIPs)
+ * with properly formatted placeholders for use with docxtemplater.
+ *
+ * @usage
+ * Run from project root:
+ * ```bash
+ * npx tsx scripts/create-template.ts
+ * ```
+ *
+ * @output
+ * - File: templates/pip-template.docx
+ * - Contains placeholders: {title}, {date}, {pip_body}, {language}
+ *
+ * @placeholders
+ * - {title} - Document title (e.g., "Performance Improvement Plan")
+ * - {date} - Current date in YYYY-MM-DD format
+ * - {pip_body} - Main PIP content (REQUIRED for docxtemplater)
+ * - {language} - Output language code (e.g., "en", "fr")
+ *
+ * @notes
+ * - This script uses the 'docx' npm package to programmatically create a DOCX file
+ * - The resulting template is compatible with docxtemplater for runtime replacement
+ * - Placeholders must be plain text (not Word fields) for docxtemplater compatibility
+ * - The template includes professional formatting with margins and spacing
+ *
+ * @see scripts/test-template.ts - Test the generated template
+ * @see scripts/README.md - Full documentation
  */
 
 import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } from "docx";
@@ -98,7 +124,7 @@ async function createTemplate() {
   console.log("  • {language} - Output language");
 }
 
-createTemplate().catch((error) => {
+createTemplate().catch((error: unknown) => {
   console.error("❌ Failed to create template:", error);
   process.exit(1);
 });

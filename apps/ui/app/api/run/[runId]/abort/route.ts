@@ -22,7 +22,7 @@ export async function POST(
       ok: true,
       message: `Run ${runId} abort requested`
     });
-  } catch (error) {
+  } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return Response.json(
       { error: message, details: error },

@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { RUN_TTL, MAX_BUFFERED_EVENTS, CLEANUP_INTERVAL } from "../constants/timeouts.js";
 
 export type RunStatus = "pending" | "running" | "success" | "error" | "aborted";
 
@@ -23,15 +24,14 @@ interface RunRecord {
   abortTimeout?: NodeJS.Timeout | null;
 }
 
-const RUN_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const MAX_BUFFERED_EVENTS = 1000;
+const RUN_TTL_MS = RUN_TTL;
 const DISCONNECT_GRACE_MS = 15_000;
 
 class RunStore {
   private runs = new Map<string, RunRecord>();
 
   constructor() {
-    setInterval(() => this.cleanup(), 5 * 60 * 1000).unref?.();
+    setInterval(() => this.cleanup(), CLEANUP_INTERVAL).unref?.();
   }
 
   createRun(): { id: string; signal: AbortSignal } {

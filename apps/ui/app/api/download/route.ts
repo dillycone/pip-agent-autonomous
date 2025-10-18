@@ -71,7 +71,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         "X-Download-Path": sanitizePath(absolutePath)
       }
     });
-  } catch (error) {
+  } catch (error: unknown) {
     const sanitized = sanitizeError(error);
     return NextResponse.json(
       {

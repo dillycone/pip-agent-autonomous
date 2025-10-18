@@ -4,6 +4,7 @@
 
 import path from "node:path";
 import { PROJECT_ROOT } from "./paths.js";
+import { isSensitiveField, SENSITIVE_PATTERNS } from "./sensitive-data.js";
 
 export interface SanitizedError {
   name: string;
@@ -13,18 +14,8 @@ export interface SanitizedError {
   [key: string]: unknown;
 }
 
-export const SENSITIVE_FIELD_PATTERNS = [
-  /\bpassword\b/i,
-  /\bapi[_-]?key\b/i,
-  /\btoken\b/i,
-  /\bsecret\b/i,
-  /\bauthorization\b/i,
-  /\bauth\b/i,
-  /\bbearer\b/i,
-  /\bcredential(?:s)?\b/i,
-  /\baccess[_-]?token\b/i,
-  /\brefresh[_-]?token\b/i
-];
+// Re-export for backward compatibility
+export const SENSITIVE_FIELD_PATTERNS = SENSITIVE_PATTERNS;
 
 const API_KEY_PATTERN = /\b(sk-[a-zA-Z0-9]{32,}|AIza[a-zA-Z0-9_-]{35})\b/g;
 const REDACTED = "[REDACTED]";
@@ -262,15 +253,6 @@ export function sanitizeForLogging(data: unknown, maxDepth: number = 3): unknown
 
   // Fallback for functions, symbols, etc.
   return String(data);
-}
-
-/**
- * Checks if a field name is sensitive.
- * @param fieldName - The field name to check
- * @returns True if the field is sensitive
- */
-function isSensitiveField(fieldName: string): boolean {
-  return SENSITIVE_FIELD_PATTERNS.some(pattern => pattern.test(fieldName));
 }
 
 function escapeForRegex(text: string): string {

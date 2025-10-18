@@ -15,6 +15,7 @@ import { spawn, SpawnOptions } from "node:child_process";
 import { extname } from "node:path";
 import { validateFilePath } from "./validation.js";
 import { PROJECT_ROOT } from "./paths.js";
+import { FILE_OPERATION_TIMEOUT, BUFFER_SIZE } from "../constants/timeouts.js";
 
 // ============================================================================
 // Command Whitelist
@@ -231,7 +232,7 @@ export async function safeSpawn(
     cwd: options?.cwd || process.cwd(),
     env: { ...baseEnv, ...options?.env },
     timeout: options?.timeout ?? 300000, // 5 minutes default
-    maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024, // 10MB default
+    maxBuffer: options?.maxBuffer ?? BUFFER_SIZE, // 10MB default
     validatePaths: options?.validatePaths ?? true,
   };
 
@@ -268,7 +269,7 @@ export async function safeSpawn(
         if (!child.killed) {
           child.kill("SIGKILL");
         }
-      }, 5000);
+      }, FILE_OPERATION_TIMEOUT);
     }, opts.timeout);
 
     // Collect stdout
@@ -333,64 +334,3 @@ export async function safeSpawn(
   });
 }
 
-/**
- * Wrapper for running ffmpeg commands safely
- *
- * @param args - ffmpeg arguments (without "ffmpeg" command)
- * @param options - Execution options
- * @returns Command result
- *
- * @example
- * await runFFmpeg(["-i", "input.mp3", "output.wav"]);
- */
-export async function runFFmpeg(
-  args: string[],
-  options?: SafeSpawnOptions
-): Promise<CommandResult> {
-  return safeSpawn("ffmpeg", args, options);
-}
-
-/**
- * Wrapper for running ffprobe commands safely
- *
- * @param args - ffprobe arguments (without "ffprobe" command)
- * @param options - Execution options
- * @returns Command result
- *
- * @example
- * const result = await runFFprobe(["-v", "error", "-show_format", "audio.mp3"]);
- */
-export async function runFFprobe(
-  args: string[],
-  options?: SafeSpawnOptions
-): Promise<CommandResult> {
-  return safeSpawn("ffprobe", args, options);
-}
-
-/**
- * Checks if a command is available in the system PATH
- *
- * @param command - The command to check
- * @returns True if command is available
- *
- * @example
- * if (await isCommandAvailable("ffmpeg")) {
- *   // ffmpeg is installed
- * }
- */
-export async function isCommandAvailable(command: string): Promise<boolean> {
-  try {
-    validateCommand(command);
-
-    // Try to get version or help (most commands support --version or --help)
-    const result = await safeSpawn(
-      command,
-      ["--version"],
-      { timeout: 5000, validatePaths: false }
-    );
-
-    return result.exitCode === 0;
-  } catch (error) {
-    return false;
-  }
-}

@@ -50,36 +50,3 @@ export function mcpSuccess(data: Record<string, unknown>): MCPToolResult {
   };
 }
 
-/**
- * Helper to check if an environment variable exists.
- *
- * @param key - Environment variable name
- * @returns True if the environment variable is set and non-empty
- *
- * @example
- * if (!hasEnvVar("GEMINI_API_KEY")) {
- *   return mcpError("Missing GEMINI_API_KEY");
- * }
- */
-export function hasEnvVar(key: string): boolean {
-  const value = process.env[key];
-  return typeof value === "string" && value.length > 0;
-}
-
-/**
- * Helper to get an environment variable as a number with a default fallback.
- *
- * @param key - Environment variable name
- * @param defaultValue - Default value if env var is not set or invalid
- * @returns Parsed number value or default
- *
- * @example
- * const chunkSeconds = getEnvNumber("GEMINI_CHUNK_SECONDS", DEFAULT_AUDIO_CHUNK_SECONDS);
- */
-export function getEnvNumber(key: string, defaultValue: number): number {
-  const value = process.env[key];
-  if (!value) return defaultValue;
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : defaultValue;
-}

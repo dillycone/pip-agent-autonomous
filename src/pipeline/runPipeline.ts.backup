@@ -1,0 +1,947 @@
+import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import fs from "node:fs";
+import path from "node:path";
+import { geminiTranscriber } from "../mcp/geminiTranscriber.js";
+import { docxExporter } from "../mcp/docxExporter.js";
+import { pipGenerator } from "../mcp/pipGenerator.js";
+import { makePolicyJudgeAgent } from "../agents/policyJudge.js";
+import {
+  MODELS,
+  MAX_TURNS,
+  MAX_REVIEW_ROUNDS,
+  PIP_DRAFT_MODEL,
+  ENABLE_DRAFT_STREAMING
+} from "../config.js";
+import {
+  isStreamEvent,
+  isSystemMessage,
+  isToolResultEvent
+} from "../types/index.js";
+import { sanitizeError, sanitizePath } from "../utils/sanitize.js";
+import { TokenCostTracker } from "../utils/costTracker.js";
+import { extractModelFamily } from "../utils/modelFamily.js";
+import { runWithDraftStreamContext, emitDraftStreamEvent } from "./draftStreamContext.js";
+import type { RunStatus } from "../server/runStore.js";
+import { createLogger, type Logger } from "./logger.js";
+import {
+  handleToolUseEvent,
+  handleToolResultEvent,
+  handleJudgeVerdictEvent,
+  extractJsonBlock,
+  type TranscriptionState,
+  type DraftState,
+  type JudgeState,
+  type InflightTracking
+} from "./eventHandlers.js";
+import {
+  isValidDocx,
+  renameDocxWithModelFamily,
+  handleWorkerErrorRecovery,
+  parseFinalResult,
+  processFinalResult,
+  toSerializableError
+} from "./outputValidation.js";
+
+const MCP_SERVERS = {
+  "gemini-transcriber": geminiTranscriber,
+  "pip-generator": pipGenerator,
+  "docx-exporter": docxExporter
+} as const;
+
+const ALLOWED_TOOLS = [
+  "mcp__gemini-transcriber__transcribe_audio",
+  "mcp__pip-generator__draft_pip",
+  "mcp__docx-exporter__render_docx"
+];
+
+type Step = "transcribe" | "draft" | "review" | "export";
+type StepStatus = "pending" | "running" | "success" | "error";
+
+export interface PipelineHandlers {
+  emit(event: string, data: unknown): void;
+  setRunStatus(status: RunStatus, error?: unknown): void;
+  finish(status: RunStatus, error?: unknown): void;
+}
+
+export interface RunPipelineParams {
+  runId: string;
+  audioPath: string;
+  templatePath: string;
+  outputPath: string;
+  promptPath: string;
+  guidelinesPath: string;
+  inputLanguage: string;
+  outputLanguage: string;
+  projectRoot: string;
+  signal?: AbortSignal;
+  handlers: PipelineHandlers;
+}
+
+class RunAbortError extends Error {
+  constructor(message = "Run aborted") {
+    super(message);
+    this.name = "RunAbortError";
+  }
+}
+
+function buildPipelinePrompt(params: {
+  audioPath: string;
+  inputLanguage: string;
+  outputLanguage: string;
+  templatePath: string;
+  outputPath: string;
+  promptPath: string;
+}) {
+  const { audioPath, inputLanguage, outputLanguage, templatePath, outputPath, promptPath } = params;
+
+  const transcriptionArgsExample = {
+    audioPath,
+    inputLanguage,
+    outputLanguage,
+    diarize: true,
+    timestamps: true,
+    startChunk: 0
+  };
+
+  const pipDraftArgs = {
+    transcript: "<REPLACE_WITH_TRANSCRIPT>",
+    outputLanguage,
+    promptPath
+  };
+
+  const docxArgs = {
+    templatePath,
+    outputPath,
+    language: outputLanguage,
+    title: "Performance Improvement Plan",
+    body: "<REPLACE_WITH_APPROVED_DRAFT>"
+  };
+
+  return [
+    "You are an autonomous pipeline operator. Use the available MCP tools to complete the PIP workflow.",
+    "TOOLS:",
+    "- mcp__gemini-transcriber__transcribe_audio → transcribe audio meeting recordings.",
+    "- mcp__pip-generator__draft_pip → create a draft PIP from a transcript.",
+    "- mcp__docx-exporter__render_docx → produce the final DOCX file.",
+    "STEPS:",
+    `1. Initialize CURRENT_CHUNK=0 and TRANSCRIPTS=[] (strings). Call transcription with:\n${JSON.stringify(transcriptionArgsExample, null, 2)}`,
+    "   Append transcripts, merge segments. Loop until nextChunk is null.",
+    `2. Call PIP generator with:\n${JSON.stringify(pipDraftArgs, null, 2)}\n   Set CURRENT_DRAFT.`,
+    `3. Send CURRENT_DRAFT to subagent \"policy-judge\" for review. Iterate up to ${MAX_REVIEW_ROUNDS}.`,
+    `4. When approved, set APPROVED_DRAFT and call docx exporter with:\n${JSON.stringify(docxArgs, null, 2)}`,
+    `5. Respond ONLY with JSON: {"status":"ok","draft":APPROVED_DRAFT,"docx":"${outputPath}"}`
+  ].join("\n\n");
+}
+
+/**
+ * Runs the complete PIP generation pipeline
+ *
+ * This is the main orchestration function that coordinates:
+ * 1. Audio transcription via Gemini
+ * 2. PIP draft generation via Claude
+ * 3. Policy review via judge agent
+ * 4. DOCX export
+ *
+ * @param params - Pipeline parameters including paths, languages, and handlers
+ */
+export async function runPipeline(params: RunPipelineParams): Promise<void> {
+
+  const {
+    runId,
+    audioPath,
+    templatePath,
+    outputPath,
+    promptPath,
+    guidelinesPath,
+    inputLanguage,
+    outputLanguage,
+    projectRoot,
+    signal,
+    handlers
+  } = params;
+
+  // Create logger for structured logging
+  const logger = createLogger(handlers.emit);
+
+  logger.info(`Pipeline started - runId: ${runId}`, {
+    audioPath,
+    templatePath,
+    outputPath,
+    promptPath,
+    guidelinesPath
+  });
+
+  /**
+   * Core pipeline execution logic
+   * Extracted as inner function to support draft streaming context wrapper
+   */
+  const runCore = async (): Promise<void> => {
+    logger.debug("runCore execution started");
+    const emit = handlers.emit;
+    // Pipeline state tracking
+  let currentRunStatus: RunStatus = "pending";
+  let lastError: unknown;
+  let pipDraftModel: string | null = PIP_DRAFT_MODEL || null;
+  let pipModelFamily: string | null = pipDraftModel ? extractModelFamily(pipDraftModel) : null;
+
+  /**
+   * Updates the draft model and extracts its family
+   */
+  const updateDraftModel = (candidate: unknown): void => {
+    if (typeof candidate !== "string") {
+      return;
+    }
+    const trimmed = candidate.trim();
+    if (!trimmed || trimmed === pipDraftModel) {
+      return;
+    }
+    pipDraftModel = trimmed;
+    pipModelFamily = extractModelFamily(trimmed);
+    logger.debug(`Draft model updated: ${pipDraftModel} (family: ${pipModelFamily})`);
+  };
+
+  /**
+   * Updates the current run status
+   */
+  const setRunStatus = (status: RunStatus, error?: unknown): void => {
+    currentRunStatus = status;
+    handlers.setRunStatus(status, error);
+    if (error) {
+      lastError = error;
+    }
+    logger.debug(`Run status updated: ${status}`);
+  };
+
+  /**
+   * Sends step status updates
+   */
+  type Step = "transcribe" | "draft" | "review" | "export";
+  type StepStatus = "pending" | "running" | "success" | "error";
+
+  const sendStatus = (
+    step: Step,
+    status: StepStatus,
+    meta?: Record<string, unknown>
+  ): void => {
+    const at = new Date().toISOString();
+    const statusEvent = meta && Object.keys(meta).length > 0
+      ? { step, status, meta, at }
+      : { step, status, at };
+    emit("status", statusEvent);
+    logger.debug(`Step status: ${step} -> ${status}`, meta);
+  };
+
+  /**
+   * Token cost tracking and emission
+   */
+  const costTracker = new TokenCostTracker();
+  const pushCost = (): void => {
+    const summary = costTracker.getSummary();
+    emit("cost", {
+      summary: {
+        totalTokens: summary.totalTokens,
+        estimatedCostUSD: summary.estimatedCostUSD,
+        breakdown: summary.breakdown
+      },
+      at: new Date().toISOString()
+    });
+  };
+
+  /**
+   * JSON parse failure logging (rate limited)
+   */
+  const MAX_JSON_DEBUG_LOGS = 5;
+  let jsonParseDebugCount = 0;
+  const logJsonParseFailure = (source: string, raw: string, error: unknown): void => {
+    if (jsonParseDebugCount >= MAX_JSON_DEBUG_LOGS) {
+      return;
+    }
+    jsonParseDebugCount += 1;
+    logger.debug(`Failed to parse JSON from ${source}`, {
+      snippet: raw.slice(0, 200),
+      rawLength: raw.length,
+      error: sanitizeError(error)
+    });
+  };
+
+  // Initialize judge agent
+  const judgeGuidelines = fs.readFileSync(guidelinesPath, "utf-8");
+  const judgeAgent = makePolicyJudgeAgent(judgeGuidelines, outputLanguage);
+
+  /**
+   * Abort signal handling
+   */
+  const abortSignal: AbortSignal = signal ?? new AbortController().signal;
+  let aborted = false;
+  let pipelineIterator: AsyncIterableIterator<SDKMessage> | undefined;
+
+  const clearPreviewTimeouts = (): void => {
+    while (draftState.previewTimeouts.length > 0) {
+      const timeout = draftState.previewTimeouts.pop();
+      if (timeout) clearTimeout(timeout);
+    }
+  };
+
+  const abortListener = (): void => {
+    aborted = true;
+    clearPreviewTimeouts();
+    logger.warn("Abort requested; stopping pipeline iteration");
+    if (pipelineIterator?.return) {
+      Promise.resolve()
+        .then(() => pipelineIterator?.return?.())
+        .catch(() => undefined);
+    }
+  };
+  abortSignal.addEventListener("abort", abortListener);
+
+  const ensureNotAborted = (): void => {
+    if (aborted || abortSignal.aborted) {
+      throw new RunAbortError();
+    }
+  };
+
+  setRunStatus("running");
+  let hasFinalEvent = false;
+
+  logger.info(`Creating query iterator for run ${runId}`, {
+    model: MODELS.CLAUDE_SONNET,
+    maxTurns: MAX_TURNS,
+    allowedTools: ALLOWED_TOOLS
+  });
+
+  const iterator = query({
+    prompt: buildPipelinePrompt({
+      audioPath,
+      inputLanguage,
+      outputLanguage,
+      templatePath,
+      outputPath,
+      promptPath
+    }),
+    options: {
+      model: MODELS.CLAUDE_SONNET,
+      agents: { "policy-judge": judgeAgent },
+      mcpServers: MCP_SERVERS,
+      allowedTools: ALLOWED_TOOLS,
+      permissionMode: "bypassPermissions",
+      maxTurns: MAX_TURNS
+    }
+  });
+  pipelineIterator = iterator;
+  logger.info("Iterator created, entering message loop");
+
+  /**
+   * Initialize pipeline state objects
+   */
+  let transcriptionState: TranscriptionState = {
+    transcribeProcessed: 0,
+    transcribeTotal: null,
+    transcriptAccumulator: "",
+    chunkSnippets: new Map<number, string>(),
+    processedProgressSource: "heuristic",
+    totalProgressSource: "heuristic"
+  };
+
+  let draftState: DraftState = {
+    draftPreviewEmitted: false,
+    previewTimeouts: []
+  };
+
+  let judgeState: JudgeState = {
+    judgeRound: 0,
+    maxRounds: MAX_REVIEW_ROUNDS
+  };
+
+  /**
+   * Inflight tool tracking for matching tool use with tool results
+   */
+  const fallbackToolId = (name?: string): string =>
+    `${name || "tool"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  type Inflight = { id: string; name?: string; startedAt: string };
+  const inflightMap: Map<string, Inflight> = new Map();
+
+  const pushInflight = (candidateId: string | undefined, name?: string): Inflight => {
+    const id =
+      typeof candidateId === "string" && candidateId.trim().length > 0
+        ? candidateId
+        : fallbackToolId(name);
+    const startedAt = new Date().toISOString();
+    const item: Inflight = { id, name, startedAt };
+    inflightMap.set(id, item);
+    return item;
+  };
+
+  const takeInflight = (candidateId?: string, name?: string): Inflight | undefined => {
+    if (candidateId && inflightMap.has(candidateId)) {
+      const item = inflightMap.get(candidateId);
+      inflightMap.delete(candidateId);
+      return item;
+    }
+    if (name) {
+      const entry = Array.from(inflightMap.values()).find((value) => value.name === name);
+      if (entry) {
+        inflightMap.delete(entry.id);
+        return entry;
+      }
+    }
+    return undefined;
+  };
+
+  const inflight: InflightTracking = {
+    inflightMap,
+    pushInflight,
+    takeInflight
+  };
+
+  // Create event handler context
+  const eventContext = {
+    emit,
+    sendStatus,
+    costTracker,
+    pushCost,
+    updateDraftModel,
+    logJsonParseFailure
+  };
+
+  sendStatus("transcribe", "running");
+  logger.info(`Starting iterator loop for run ${runId}`);
+
+  /**
+   * Main message processing loop
+   */
+  try {
+    try {
+      let messageCount = 0;
+      for await (const message of iterator) {
+        messageCount++;
+        logger.debug(`Processing message ${messageCount}: ${message.type}`);
+        ensureNotAborted();
+
+        // Track token costs for this message
+        costTracker.recordMessage(message);
+        pushCost();
+
+        // Handle system messages (session info)
+        if (isSystemMessage(message) && "sessionId" in message) {
+          const sessionId = (message as SDKMessage & { sessionId?: string }).sessionId;
+          if (sessionId) {
+            logger.info(`Session ${sessionId}`);
+          }
+        }
+
+        // Handle assistant messages with tool use events
+        if (message.type === "assistant" && "message" in message) {
+          const assistantMsg = (message as any).message;
+          if (
+            assistantMsg &&
+            typeof assistantMsg === "object" &&
+            "content" in assistantMsg &&
+            Array.isArray(assistantMsg.content)
+          ) {
+            for (const block of assistantMsg.content) {
+              if (block && typeof block === "object" && block.type === "tool_use") {
+                const toolUse = block as { id: string; name: string; input: unknown };
+                handleToolUseEvent(
+                  toolUse,
+                  eventContext,
+                  inflight,
+                  ENABLE_DRAFT_STREAMING,
+                  emitDraftStreamEvent,
+                  runId
+                );
+              }
+            }
+          }
+        }
+
+        // Handle stream events (tool results, content deltas, etc.)
+        if (isStreamEvent(message)) {
+          const eventData = (message as SDKMessage & { event: unknown }).event as unknown;
+
+          // Handle tool result events
+          if (isToolResultEvent(eventData)) {
+            const resultData = {
+              id: (eventData as { id?: string }).id,
+              name: (eventData as { name?: string }).name,
+              isError: (eventData as { isError?: boolean }).isError,
+              content: (eventData as { content?: unknown }).content
+            };
+
+            const updated = handleToolResultEvent(
+              resultData,
+              eventContext,
+              inflight,
+              transcriptionState,
+              draftState,
+              ENABLE_DRAFT_STREAMING
+            );
+
+            transcriptionState = updated.transcriptionState;
+            draftState = updated.draftState;
+          }
+
+          // Handle judge verdict events from streaming content
+          if (eventData && typeof eventData === "object") {
+            const jsonFields = "delta" in eventData ? (eventData as { delta?: unknown }).delta : undefined;
+            const maybeText =
+              typeof jsonFields === "string"
+                ? jsonFields
+                : typeof (eventData as { content?: unknown }).content === "string"
+                  ? ((eventData as { content?: unknown }).content as string)
+                  : undefined;
+
+            const candidate = extractJsonBlock(maybeText);
+            if (candidate) {
+              judgeState = handleJudgeVerdictEvent(candidate, judgeState, eventContext);
+            }
+          }
+        }
+
+        // Handle final result messages
+        if (message.type === "result") {
+          if (message.subtype === "success") {
+            const rawResult = message.result;
+            const payload = parseFinalResult(rawResult, logJsonParseFailure);
+
+            const processedResult = processFinalResult(
+              payload,
+              outputPath,
+              projectRoot,
+              pipModelFamily,
+              emit,
+              sendStatus
+            );
+
+            if (processedResult.success) {
+              emit("final", {
+                ok: true,
+                draft: processedResult.draft,
+                docx: sanitizePath(processedResult.finalDocxPath!),
+                docxRelative: processedResult.docxRelative,
+                at: new Date().toISOString()
+              });
+              hasFinalEvent = true;
+              setRunStatus("success");
+            } else {
+              emit("error", {
+                message: "Pipeline failed",
+                details: toSerializableError(payload ?? rawResult)
+              });
+              setRunStatus("error", payload ?? rawResult);
+            }
+          } else {
+            emit("error", { message: "Run error", details: toSerializableError(message) });
+            setRunStatus("error", message);
+          }
+        }
+      }
+
+      logger.info(`Iterator loop completed normally, processed ${messageCount} messages`);
+
+          if (name?.includes("gemini-transcriber")) {
+            if (resultData.isError) {
+              sendStatus("transcribe", "error");
+            } else {
+              sendStatus("transcribe", "success");
+              sendStatus("draft", "running");
+              draftPreviewEmitted = false;
+            }
+          } else if (name?.includes("pip-generator")) {
+            if (resultData.isError) {
+              sendStatus("draft", "error");
+            } else {
+              sendStatus("draft", "success");
+              sendStatus("review", "running");
+            }
+          } else if (name?.includes("docx-exporter")) {
+            if (resultData.isError) {
+              sendStatus("export", "error");
+            } else {
+              sendStatus("review", "success");
+              sendStatus("export", "success");
+            }
+          }
+
+          const payload = resultData.content;
+          if (!resultData.isError) {
+            const usage = extractToolUsage(payload);
+            if (usage) {
+              const provider = usage.provider?.toLowerCase();
+              const isGeminiTool = name?.includes("gemini-transcriber") || provider === "gemini";
+              if (isGeminiTool) {
+                if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                  costTracker.recordTotals({
+                    geminiInputTokens: usage.inputTokens,
+                    geminiOutputTokens: usage.outputTokens
+                  });
+                  pushCost();
+                }
+              } else {
+                if (
+                  usage.inputTokens > 0 ||
+                  usage.outputTokens > 0 ||
+                  usage.cacheCreationTokens > 0 ||
+                  usage.cacheReadTokens > 0
+                ) {
+                  costTracker.recordTotals({
+                    inputTokens: usage.inputTokens,
+                    outputTokens: usage.outputTokens,
+                    cacheCreationTokens: usage.cacheCreationTokens,
+                    cacheReadTokens: usage.cacheReadTokens
+                  });
+                  pushCost();
+                }
+              }
+            }
+          }
+
+          const textPart = Array.isArray(payload)
+            ? payload.find((item) => typeof item?.text === "string")?.text
+            : typeof payload === "string"
+              ? payload
+              : null;
+
+          if (typeof textPart === "string") {
+            try {
+              const parsed = JSON.parse(textPart) as {
+                transcript?: string;
+                draft?: string;
+                processedChunks?: number;
+                totalChunks?: number;
+                startChunk?: number;
+                nextChunk?: number | null;
+                segments?: Array<{ text?: unknown }>;
+                model?: unknown;
+                usage?: unknown;
+              };
+              if (name?.includes("pip-generator")) {
+                const directModel =
+                  typeof parsed.model === "string" ? parsed.model : undefined;
+                if (directModel) {
+                  updateDraftModel(directModel);
+                } else if (
+                  parsed.usage &&
+                  typeof parsed.usage === "object" &&
+                  !Array.isArray(parsed.usage)
+                ) {
+                  const usageModel = (parsed.usage as { model?: unknown }).model;
+                  updateDraftModel(usageModel);
+                }
+              }
+              if (!ENABLE_DRAFT_STREAMING && !resultData.isError && name?.includes("pip-generator") && !draftPreviewEmitted) {
+                const draftText = typeof parsed.draft === "string" ? parsed.draft.trim() : "";
+                if (draftText) {
+                  draftPreviewEmitted = true;
+                  const snippetLines = draftText
+                    .split(/\r?\n/)
+                    .map((line) => line.trim())
+                    .filter((line): line is string => line.length > 0)
+                    .slice(0, 3);
+                  snippetLines.forEach((line, idx) => {
+                    const timeout = setTimeout(() => {
+                      emit("draft_preview_chunk", {
+                        text: line,
+                        index: idx,
+                        total: snippetLines.length,
+                        at: new Date().toISOString()
+                      });
+                    }, idx * 120);
+                    previewTimeouts.push(timeout);
+                  });
+                  const completionDelay = snippetLines.length * 120 + 80;
+                  previewTimeouts.push(
+                    setTimeout(() => {
+                      emit("draft_preview_complete", {
+                        total: snippetLines.length,
+                        at: new Date().toISOString()
+                      });
+                    }, completionDelay)
+                  );
+                }
+              }
+
+              if (typeof parsed.totalChunks === "number" && parsed.totalChunks > 0) {
+                transcribeTotal = Math.max(transcribeTotal ?? 0, parsed.totalChunks);
+                totalProgressSource = "explicit";
+              }
+              if (typeof parsed.processedChunks === "number") {
+                const start =
+                  typeof parsed.startChunk === "number"
+                    ? parsed.startChunk
+                    : transcribeProcessed;
+                const candidateProcessed = start + parsed.processedChunks;
+                transcribeProcessed = Math.max(transcribeProcessed, candidateProcessed);
+                processedProgressSource = "explicit";
+              }
+              if (
+                typeof parsed.startChunk === "number" &&
+                typeof parsed.processedChunks !== "number"
+              ) {
+                transcribeProcessed = Math.max(transcribeProcessed, parsed.startChunk);
+                processedProgressSource = "explicit";
+              }
+              if (typeof parsed.nextChunk === "number") {
+                const inferredTotal = parsed.nextChunk + 1;
+                transcribeTotal = Math.max(transcribeTotal ?? 0, inferredTotal);
+                totalProgressSource = "explicit";
+              } else if (
+                parsed.nextChunk === null &&
+                transcribeTotal === null &&
+                transcribeProcessed > 0
+              ) {
+                transcribeTotal = transcribeProcessed;
+                totalProgressSource = "heuristic";
+              }
+
+              const rawTranscript = typeof parsed.transcript === "string" ? parsed.transcript : "";
+              let transcriptText = rawTranscript.trim();
+              if (!transcriptText && Array.isArray(parsed.segments)) {
+                transcriptText = parsed.segments
+                  .map((seg) => {
+                    if (!seg || typeof seg !== "object") return "";
+                    const text = (seg as { text?: unknown }).text;
+                    return typeof text === "string" ? text.trim() : "";
+                  })
+                  .filter(Boolean)
+                  .join("\n");
+              }
+
+              if (transcribeProcessed === 0 && transcriptText) {
+                transcribeProcessed = 1;
+                processedProgressSource = "heuristic";
+              }
+              if (transcribeTotal === null && transcriptText) {
+                transcribeTotal = transcribeProcessed > 0 ? transcribeProcessed : 1;
+                totalProgressSource = "heuristic";
+              }
+
+              if (transcriptText) {
+                if (typeof parsed.startChunk === "number") {
+                  chunkSnippets.set(parsed.startChunk, transcriptText);
+                  const ordered = Array.from(chunkSnippets.entries())
+                    .sort((a, b) => a[0] - b[0])
+                    .map(([, text]) => text.trim())
+                    .filter(Boolean);
+                  transcriptAccumulator = ordered.join("\n\n");
+                } else {
+                  transcriptAccumulator = transcriptText;
+                }
+                const preview = (transcriptAccumulator || transcriptText).slice(0, 1500);
+                const transcriptEvent: Record<string, unknown> = {
+                  transcript: preview,
+                  processedChunks: transcribeProcessed || 1,
+                  totalChunks: transcribeTotal ?? (transcribeProcessed || 1),
+                  at: new Date().toISOString()
+                };
+                if (processedProgressSource === "heuristic" || totalProgressSource === "heuristic") {
+                  transcriptEvent.meta = { progressMode: "heuristic" as const };
+                }
+                emit("transcript_chunk", transcriptEvent);
+              } else if (transcribeProcessed > 0 || transcribeTotal !== null) {
+                const transcriptEvent: Record<string, unknown> = {
+                  processedChunks: transcribeProcessed || undefined,
+                  totalChunks: transcribeTotal ?? undefined,
+                  at: new Date().toISOString()
+                };
+                if (processedProgressSource === "heuristic" || totalProgressSource === "heuristic") {
+                  transcriptEvent.meta = { progressMode: "heuristic" as const };
+                }
+                emit("transcript_chunk", transcriptEvent);
+              }
+            } catch (error: unknown) {
+              logJsonParseFailure("tool_result_content", textPart, error);
+            }
+          }
+
+          if (resultData.isError) {
+            emit("error", {
+              message: "Tool error",
+              details: toSerializableError(resultData.content)
+            });
+          }
+        }
+
+        if (eventData && typeof eventData === "object") {
+          const jsonFields = "delta" in eventData ? (eventData as { delta?: unknown }).delta : undefined;
+          const maybeText =
+            typeof jsonFields === "string"
+              ? jsonFields
+              : typeof (eventData as { content?: unknown }).content === "string"
+                ? ((eventData as { content?: unknown }).content as string)
+                : undefined;
+
+          const candidate = extractJsonBlock(maybeText);
+
+          if (candidate) {
+            if (judgeRound >= MAX_REVIEW_ROUNDS) {
+              continue;
+            }
+            try {
+              const verdict = JSON.parse(candidate) as {
+                approved?: boolean;
+                reasons?: string[];
+                required_changes?: string[];
+                revised_draft?: string | null;
+              };
+              if (typeof verdict.approved === "boolean") {
+                judgeRound += 1;
+                emit("judge_round", {
+                  approved: verdict.approved,
+                  reasons: verdict.reasons ?? [],
+                  required_changes: verdict.required_changes ?? [],
+                  revised_draft: verdict.revised_draft ?? null,
+                  round: judgeRound,
+                  at: new Date().toISOString()
+                });
+                const reviewStatus = verdict.approved
+                  ? "success"
+                  : judgeRound >= MAX_REVIEW_ROUNDS
+                    ? "error"
+                    : "running";
+                sendStatus("review", reviewStatus, { round: judgeRound });
+              }
+            } catch (error: unknown) {
+              logJsonParseFailure("policy_judge_verdict", candidate, error);
+            }
+          }
+        }
+      }
+
+      if (message.type === "result") {
+        if (message.subtype === "success") {
+          const rawResult = message.result;
+          let payload: unknown = rawResult;
+          if (typeof rawResult === "string") {
+            const cleaned = rawResult.replace(/```json\s*|```/g, "").trim();
+            try {
+              payload = JSON.parse(cleaned);
+            } catch (error: unknown) {
+              logJsonParseFailure("final_result_payload", cleaned, error);
+              payload = rawResult;
+            }
+          }
+
+          if (
+            payload &&
+            typeof payload === "object" &&
+            (payload as { status?: string }).status === "ok"
+          ) {
+            const draft = (payload as { draft?: string }).draft ?? "";
+            const docxRaw = (payload as { docx?: string }).docx ?? outputPath;
+            const finalDocxPath = ensureDocxPathHasModel(docxRaw);
+            const docxRelative = sanitizePath(path.relative(projectRoot, finalDocxPath));
+            sendStatus("export", "success");
+            emit("final", {
+              ok: true,
+              draft,
+              docx: sanitizePath(finalDocxPath),
+              docxRelative,
+              at: new Date().toISOString()
+            });
+            hasFinalEvent = true;
+            setRunStatus("success");
+          } else {
+            const sanitizedPayload = sanitizeError(payload ?? rawResult);
+            emit("error", {
+              message: "Pipeline failed",
+              details: sanitizedPayload
+            });
+            setRunStatus("error", sanitizedPayload);
+          }
+        } else {
+          emit("error", { message: "Run error", details: toSerializableError(message) });
+          setRunStatus("error", message);
+        }
+      }
+      }
+      console.log(`[runPipeline] Iterator loop completed normally, processed ${messageCount} messages`);
+    } catch (workerError: unknown) {
+      console.error(`[runPipeline] Worker error:`, workerError);
+      emit("log", {
+        level: "warn",
+        message: "Worker process encountered an error, checking for output file..."
+      });
+
+      if (fs.existsSync(outputPath)) {
+        const failureReason: { reason?: string } = {};
+        if (isValidDocx(outputPath, failureReason)) {
+          emit("log", { level: "info", message: "Output file was created successfully despite worker error" });
+          sendStatus("export", "success");
+          const finalDocxPath = ensureDocxPathHasModel(outputPath);
+          const docxRelative = sanitizePath(path.relative(projectRoot, finalDocxPath));
+          emit("final", {
+            ok: true,
+            docx: sanitizePath(finalDocxPath),
+            docxRelative,
+            recovered: true
+          });
+          hasFinalEvent = true;
+          setRunStatus("success");
+          clearPreviewTimeouts();
+          return;
+        } else if (failureReason.reason) {
+          emit("log", {
+            level: "warn",
+            message: `Recovered DOCX failed validation: ${failureReason.reason}`
+          });
+        } else {
+          emit("log", {
+            level: "warn",
+            message: "Recovered DOCX failed validation for an unknown reason"
+          });
+        }
+      }
+
+      throw workerError;
+    }
+
+    if (!hasFinalEvent && ["running", "pending"].includes(currentRunStatus)) {
+      console.log(`[runPipeline] No final event emitted, status: ${currentRunStatus}`);
+      const details = { message: "No final event emitted" };
+      emit("error", details);
+      setRunStatus("error", details);
+    }
+  } catch (error: unknown) {
+    console.error(`[runPipeline] Caught error in outer try-catch:`, error);
+    if (error instanceof RunAbortError) {
+      setRunStatus("aborted");
+      emit("error", { message: "Run aborted by client" });
+    } else {
+      emit("error", {
+        message: error instanceof Error ? error.message : "Unhandled error",
+        details: toSerializableError(error)
+      });
+      setRunStatus("error", error);
+    }
+  } finally {
+    console.log(`[runPipeline] Finally block, status: ${currentRunStatus}, hasFinalEvent: ${hasFinalEvent}`);
+    clearPreviewTimeouts();
+    abortSignal.removeEventListener("abort", abortListener);
+    handlers.finish(currentRunStatus, lastError);
+  }
+};
+
+  console.log(`[runPipeline] runCore function defined successfully`);
+  console.log(`[runPipeline] ENABLE_DRAFT_STREAMING: ${ENABLE_DRAFT_STREAMING}`);
+
+  if (ENABLE_DRAFT_STREAMING) {
+    console.log(`[runPipeline] Running with draft stream context`);
+    await runWithDraftStreamContext(
+      {
+        runId,
+        streamingEnabled: true,
+        emit: handlers.emit
+      },
+      async () => {
+        emitDraftStreamEvent("reset", { at: new Date().toISOString(), runId });
+        await runCore();
+      }
+    );
+  } else {
+    console.log(`[runPipeline] Running without draft stream context`);
+    await runCore();
+  }
+
+  console.log(`[runPipeline] runPipeline completed for ${runId}`);
+}

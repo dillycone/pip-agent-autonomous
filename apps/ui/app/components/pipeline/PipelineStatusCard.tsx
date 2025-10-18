@@ -1,11 +1,10 @@
 "use client";
 
 import React from "react";
+import type { Step, StepStatus } from "@/lib/types";
+import { STEP_ORDER, STEP_LABELS } from "@/lib/constants";
 import PhaseCard from "./PhaseCard";
 import styles from "./pipeline.module.css";
-
-type Step = "transcribe" | "draft" | "review" | "export";
-type StepStatus = "pending" | "running" | "success" | "error";
 
 type PipelineStatusCardProps = {
   overallProgress: number;
@@ -30,13 +29,21 @@ export default function PipelineStatusCard({
   elapsedSeconds,
   onCancel
 }: PipelineStatusCardProps) {
-  const remainingMinutes = overallProgress > 0 
+  const remainingMinutes = overallProgress > 0
     ? Math.ceil((elapsedSeconds / (overallProgress / 100)) - elapsedSeconds) / 60
     : null;
 
   const progressText = remainingMinutes && remainingMinutes > 0
     ? `${Math.ceil(remainingMinutes)} minute${Math.ceil(remainingMinutes) > 1 ? "s" : ""} remaining`
     : "Completing...";
+
+  // Use labels that are more specific for the pipeline view
+  const phaseLabels: Record<Step, string> = {
+    transcribe: "Listen",
+    draft: "Draft",
+    review: "Review",
+    export: "Export"
+  };
 
   return (
     <div className={styles.pipelineCard}>
@@ -63,7 +70,7 @@ export default function PipelineStatusCard({
       </div>
 
       <div className={styles.phaseGrid}>
-        {phaseOrder.map((phase) => (
+        {STEP_ORDER.map((phase) => (
           <PhaseCard
             key={phase}
             label={phaseLabels[phase]}

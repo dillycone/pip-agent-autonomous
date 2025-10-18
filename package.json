@@ -12,7 +12,10 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "test": "tsx --test tests/validation.test.ts tests/runRequestValidator.test.ts tests/cost.test.ts tests/runStore.test.ts"
+    "test": "tsx --test tests/validation.test.ts tests/runRequestValidator.test.ts tests/cost.test.ts tests/runStore.test.ts tests/services/anthropicService.test.ts tests/services/geminiService.test.ts tests/services/fileSystemService.test.ts tests/pipeline/pipelineStateReducer.test.ts tests/pipeline/eventHandlers.test.ts tests/pipeline/progressTracking.test.ts tests/pipeline/outputValidation.test.ts",
+    "test:services": "tsx --test tests/services/anthropicService.test.ts tests/services/geminiService.test.ts tests/services/fileSystemService.test.ts",
+    "test:unit": "tsx --test tests/validation.test.ts tests/runRequestValidator.test.ts tests/cost.test.ts tests/runStore.test.ts",
+    "test:pipeline": "tsx --test tests/pipeline/pipelineStateReducer.test.ts tests/pipeline/eventHandlers.test.ts tests/pipeline/progressTracking.test.ts tests/pipeline/outputValidation.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.14",
@@ -21,11 +24,9 @@
     "docx": "^8.5.0",
     "docxtemplater": "^3.44.0",
     "dotenv": "^16.4.5",
-    "fs-extra": "^11.2.0",
     "mime": "^4.0.4",
     "pino": "^10.0.0",
     "pizzip": "^3.2.0",
-    "pump": "^3.0.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

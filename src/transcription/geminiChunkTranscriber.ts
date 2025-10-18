@@ -100,8 +100,8 @@ export async function transcribeChunk(params: {
       let parsed: unknown;
       try {
         parsed = JSON.parse(cleaned);
-      } catch (err) {
-        throw new Error(`Failed to parse JSON from Gemini response: ${(err as Error).message}`);
+      } catch (err: unknown) {
+        throw new Error(`Failed to parse JSON from Gemini response: ${err instanceof Error ? err.message : String(err)}`);
       }
 
       let transcriptionData: GeminiTranscriptionResult | null = null;
@@ -143,7 +143,7 @@ export async function transcribeChunk(params: {
       }
 
       return { transcript, segments, usage };
-    } catch (err) {
+    } catch (err: unknown) {
       lastError = err;
       if (attempt < retries) {
         await delay(1000 * (attempt + 1));

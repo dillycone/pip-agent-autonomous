@@ -202,13 +202,6 @@ export const MAX_TURNS = 60;
  */
 export const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 
-/**
- * Enable pretty printing for logs (development mode)
- * In production (NODE_ENV=production), logs are always JSON
- * Default: true in development, false in production
- */
-export const LOG_PRETTY = process.env.NODE_ENV !== "production";
-
 // ============================================================================
 // Transcription Configuration
 // ============================================================================
@@ -283,13 +276,6 @@ export const GUIDELINES_PATH = "policies/guidelines.txt";
 // ============================================================================
 // Security Configuration
 // ============================================================================
-
-/**
- * Maximum allowed path length in characters
- * Prevents buffer overflow and extremely long path attacks
- * Default: 4096 (standard on most Unix systems)
- */
-export const MAX_PATH_LENGTH = 4096;
 
 /**
  * Allowed audio file extensions for transcription
@@ -459,42 +445,3 @@ export function validateRequiredConfig(): { valid: boolean; errors: string[] } {
   };
 }
 
-// ============================================================================
-// Configuration Summary
-// ============================================================================
-
-/**
- * Get a summary of the current configuration
- * Useful for debugging and logging
- */
-export function getConfigSummary() {
-  return {
-    models: {
-      claude: MODELS.CLAUDE_SONNET,
-      claudePip: MODELS.CLAUDE_PIP,
-      gemini: MODELS.GEMINI_PRO
-    },
-    pipeline: {
-      maxReviewRounds: MAX_REVIEW_ROUNDS,
-      maxTurns: MAX_TURNS
-    },
-    transcription: {
-      chunkSeconds: GEMINI_CHUNK_SECONDS,
-      singlePassMax: GEMINI_SINGLE_PASS_MAX,
-      concurrency: GEMINI_TRANSCRIBE_CONCURRENCY,
-      retries: GEMINI_TRANSCRIBE_RETRIES
-    },
-    pipGeneration: {
-      model: PIP_DRAFT_MODEL,
-      temperature: PIP_TEMPERATURE,
-      maxOutputTokens: PIP_MAX_OUTPUT_TOKENS,
-      thinkingBudget: PIP_THINKING_BUDGET,
-      promptPath: PIP_PROMPT_PATH
-    },
-    paths: {
-      pipPrompt: PIP_PROMPT_PATH,
-      guidelines: GUIDELINES_PATH
-    },
-    pricing: PRICING
-  };
-}

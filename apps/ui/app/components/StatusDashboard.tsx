@@ -1,7 +1,9 @@
 "use client";
 
-import type { Step, StepStatus } from "../page";
+import type { Step, StepStatus } from "../../lib/types";
+import { STEP_ORDER, STEP_LABELS } from "../../lib/constants";
 import { formatDuration } from "../../lib/utils";
+import ProgressRing from "./shared/ProgressRing";
 import styles from "../styles.module.css";
 
 type StatusDashboardProps = {
@@ -28,13 +30,6 @@ export default function StatusDashboard({
   canRetry
 }: StatusDashboardProps) {
 
-  const stepLabels: Record<Step, string> = {
-    transcribe: "Transcribe",
-    draft: "Draft",
-    review: "Review",
-    export: "Export"
-  };
-
   const getStatusClass = (status: StepStatus): string => {
     switch (status) {
       case "success":
@@ -47,8 +42,6 @@ export default function StatusDashboard({
         return styles.statusPending;
     }
   };
-
-  const stepOrder: Step[] = ["transcribe", "draft", "review", "export"];
 
   return (
     <section className={styles.statusDashboard}>
@@ -72,7 +65,7 @@ export default function StatusDashboard({
           <div className={styles.statusInfo}>
             <div className={styles.statusLabel}>Overall Progress</div>
             <div className={styles.currentStep}>
-              {stepLabels[currentStep]}
+              {STEP_LABELS[currentStep]}
               <span className={styles.elapsedTime}>{formatDuration(elapsedSeconds)}</span>
             </div>
           </div>
@@ -80,13 +73,13 @@ export default function StatusDashboard({
 
         {/* Status Pills */}
         <div className={styles.statusPills}>
-          {stepOrder.map((step) => {
+          {STEP_ORDER.map((step) => {
             const status = steps[step];
             const statusClass = getStatusClass(status);
             return (
               <div key={step} className={`${styles.statusPill} ${statusClass}`}>
                 <span className={styles.pillDot}></span>
-                <span className={styles.pillLabel}>{stepLabels[step]}</span>
+                <span className={styles.pillLabel}>{STEP_LABELS[step]}</span>
               </div>
             );
           })}
@@ -116,23 +109,5 @@ export default function StatusDashboard({
         </div>
       </div>
     </section>
-  );
-}
-
-function ProgressRing({ percent }: { percent: number }) {
-  const p = Math.max(0, Math.min(100, percent));
-  const progressColor = "var(--ring-progress-color, #22c55e)";
-  const trackColor = "var(--ring-track-color, #e5e7eb)";
-  const bg = `conic-gradient(${progressColor} ${p * 3.6}deg, ${trackColor} 0)`;
-
-  return (
-    <div
-      className={styles.ring}
-      style={{ backgroundImage: bg }}
-      aria-label={`Progress ${p}%`}
-      role="img"
-    >
-      <div className={styles.ringInner}>{p}%</div>
-    </div>
   );
 }

@@ -1,4 +1,7 @@
-import type { Step, StepStatus } from "../app/page";
+export type Step = "transcribe" | "draft" | "review" | "export";
+export type StepStatus = "pending" | "running" | "success" | "error";
+
+export type StepRecord = Record<Step, StepStatus>;
 
 export type LogItem = {
   ts: number;

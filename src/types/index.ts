@@ -119,38 +119,6 @@ export interface CostSummary {
 // ===== Gemini API Types =====
 
 /**
- * Gemini file upload response
- */
-export interface GeminiUploadResponse {
-  file?: GeminiFile;
-  uri?: string;
-  fileUri?: string;
-  mimeType?: string;
-  fileMimeType?: string;
-}
-
-/**
- * Gemini file metadata
- */
-export interface GeminiFile {
-  uri?: string;
-  fileUri?: string;
-  mimeType?: string;
-  fileMimeType?: string;
-  name?: string;
-}
-
-/**
- * Gemini generate content response
- */
-export interface GeminiGenerateResponse {
-  text?: string;
-  response?: {
-    text?: () => string;
-  };
-}
-
-/**
  * Gemini transcription segment (raw from API)
  */
 export interface GeminiRawSegment {
@@ -289,29 +257,7 @@ export interface PipelineError {
  */
 export type PipelineResult = PipelineSuccess | PipelineError;
 
-/**
- * Type guard for pipeline success
- */
-export function isPipelineSuccess(result: unknown): result is PipelineSuccess {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    (result as PipelineResult).status === "ok" &&
-    typeof (result as PipelineSuccess).draft === "string"
-  );
-}
 
-/**
- * Type guard for pipeline error
- */
-export function isPipelineError(result: unknown): result is PipelineError {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    (result as PipelineResult).status === "error" &&
-    typeof (result as PipelineError).message === "string"
-  );
-}
 
 // ===== Stream Event Data Types =====
 
@@ -344,17 +290,6 @@ export interface StreamEventData {
   [key: string]: unknown;
 }
 
-/**
- * Type guard for tool use event
- */
-export function isToolUseEvent(data: unknown): data is ToolUseEventData {
-  return (
-    typeof data === "object" &&
-    data !== null &&
-    (data as ToolUseEventData).type === "tool_use" &&
-    typeof (data as ToolUseEventData).name === "string"
-  );
-}
 
 /**
  * Type guard for tool result event
@@ -379,24 +314,3 @@ export interface ErrorWithMessage {
   [key: string]: unknown;
 }
 
-/**
- * Type guard for error-like objects
- */
-export function isErrorWithMessage(error: unknown): error is ErrorWithMessage {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as ErrorWithMessage).message === "string"
-  );
-}
-
-/**
- * Extracts error message from unknown error type
- */
-export function getErrorMessage(error: unknown): string {
-  if (isErrorWithMessage(error)) {
-    return error.message;
-  }
-  return String(error);
-}

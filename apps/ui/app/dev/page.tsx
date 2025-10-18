@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LogItem, TimelineItem, CostState, RunMetadata } from "../../lib/types";
-import type { StepStatus } from "../page";
+import type { LogItem, TimelineItem, CostState, RunMetadata, StepStatus } from "../../lib/types";
 import { safeJsonParse } from "../../lib/utils";
 import styles from "./styles.module.css";
 
@@ -35,7 +34,7 @@ export default function DevToolsPage() {
           const data = await response.json();
           setAvailableRuns(data.runs || []);
         }
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Failed to fetch runs:", error);
       } finally {
         setLoadingRuns(false);
@@ -195,7 +194,7 @@ export default function DevToolsPage() {
           // For completed runs, we'd load historical data here
           pushLog("info", `Loaded completed run ${selectedRunId} (status: ${runStatus})`);
         }
-      } catch (error) {
+      } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         pushLog("error", message);
       } finally {

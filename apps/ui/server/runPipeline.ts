@@ -30,7 +30,7 @@ export async function executeRun(params: Omit<RunPipelineParams, "handlers">): P
       ...rest
     });
     console.log(`[executeRun] Pipeline completed for ${runId}`);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error(`[executeRun] Pipeline error for ${runId}:`, error);
     throw error;
   }

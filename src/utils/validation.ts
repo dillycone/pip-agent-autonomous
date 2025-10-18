@@ -101,12 +101,6 @@ const BLOCKED_PATHS = [
   "C:\\Users\\All Users"
 ];
 
-/**
- * Shell metacharacters that need escaping
- * These characters have special meaning in shells and must be escaped
- */
-const SHELL_METACHARACTERS = /[;&|`$()\\<>\n\r\x00"']/g;
-
 // ============================================================================
 // Path Validation Functions
 // ============================================================================
@@ -259,7 +253,7 @@ export function validateFilePath(
     } else {
       normalizedPath = path.resolve(opts.baseDir, filePath);
     }
-  } catch (error) {
+  } catch (error: unknown) {
     return {
       valid: false,
       error: "Failed to normalize path",
@@ -331,174 +325,9 @@ export function validateFilePath(
   };
 }
 
-/**
- * Normalizes and validates a path against a base directory
- * Ensures the resolved path remains within the base directory
- *
- * @param filePath - The path to validate
- * @param baseDir - The base directory to resolve against
- * @returns Normalized absolute path
- * @throws PathValidationError if validation fails
- *
- * @example
- * normalizeAndValidatePath("uploads/file.mp3", "/app")
- * // Returns: "/app/uploads/file.mp3"
- *
- * normalizeAndValidatePath("../etc/passwd", "/app")
- * // Throws: PathValidationError
- */
-export function normalizeAndValidatePath(filePath: string, baseDir: string): string {
-  const result = validateFilePath(filePath, {
-    baseDir,
-    allowAbsolute: false
-  });
-
-  if (!result.valid) {
-    throw new PathValidationError(
-      result.error || "Path validation failed",
-      filePath,
-      result.hint
-    );
-  }
-
-  return result.sanitizedPath!;
-}
-
-/**
- * Validates that a directory path exists or can be created
- * If mustExist is false, validates that parent directory exists
- *
- * @param dirPath - Directory path to validate
- * @param options - Validation options
- * @returns Validation result
- */
-export function validateDirectoryPath(
-  dirPath: string,
-  options?: {
-    mustExist?: boolean;
-    allowCreate?: boolean;
-  }
-): ValidationResult {
-  const opts = {
-    mustExist: options?.mustExist ?? false,
-    allowCreate: options?.allowCreate ?? true,
-  };
-
-  // First validate as a general path
-  const baseValidation = validateFilePath(dirPath, {
-    mustExist: opts.mustExist,
-    mustBeDirectory: opts.mustExist
-  });
-
-  if (!baseValidation.valid) {
-    return baseValidation;
-  }
-
-  // If directory doesn't need to exist, check parent directory
-  if (!opts.mustExist && opts.allowCreate) {
-    const parentDir = path.dirname(baseValidation.sanitizedPath!);
-
-    if (!fs.existsSync(parentDir)) {
-      return {
-        valid: false,
-        error: "Parent directory does not exist",
-        hint: `Create parent directory first: ${parentDir}`
-      };
-    }
-
-    const parentStats = fs.statSync(parentDir);
-    if (!parentStats.isDirectory()) {
-      return {
-        valid: false,
-        error: "Parent path is not a directory",
-        hint: "Parent must be a directory"
-      };
-    }
-  }
-
-  return baseValidation;
-}
-
 // ============================================================================
 // Shell Command Sanitization
 // ============================================================================
-
-/**
- * Sanitizes a string for safe use in shell commands
- * Escapes shell metacharacters and dangerous patterns
- *
- * @param arg - The argument to sanitize
- * @returns Sanitized argument safe for shell execution
- *
- * @warning This function should be used with caution. Prefer using
- * argument arrays with spawn() over shell string concatenation.
- *
- * @deprecated Prefer using {@link safeSpawn} with argument arrays instead of sanitizing shell strings.
- *
- * @example
- * sanitizeForShellCommand("file.mp3") // "file.mp3"
- * sanitizeForShellCommand("file; rm -rf /") // Throws error
- */
-export function sanitizeForShellCommand(arg: string): string {
-  if (!arg || typeof arg !== "string") {
-    return "";
-  }
-
-  if (arg.includes("\n") || arg.includes("\r")) {
-    throw new Error("Shell argument contains newline characters");
-  }
-
-  if (arg.includes("\x00")) {
-    throw new Error("Shell argument contains null bytes");
-  }
-
-  SHELL_METACHARACTERS.lastIndex = 0;
-  if (SHELL_METACHARACTERS.test(arg)) {
-    throw new Error(
-      "Shell argument contains prohibited characters. Use safeSpawn with argument arrays instead."
-    );
-  }
-
-  return arg;
-}
-
-/**
- * Validates that a string does not contain shell injection patterns
- *
- * @param input - The input to validate
- * @returns Validation result
- */
-export function validateShellSafe(input: string): ValidationResult {
-  if (!input || typeof input !== "string") {
-    return {
-      valid: false,
-      error: "Input must be a non-empty string"
-    };
-  }
-
-  // Check for shell metacharacters
-  if (SHELL_METACHARACTERS.test(input)) {
-    return {
-      valid: false,
-      error: "Input contains shell metacharacters",
-      hint: "Remove special characters like ;, &, |, $, `, etc."
-    };
-  }
-
-  // Check for command substitution patterns
-  if (input.includes("$(") || input.includes("`")) {
-    return {
-      valid: false,
-      error: "Command substitution detected",
-      hint: "Remove $() or backtick command substitution"
-    };
-  }
-
-  return {
-    valid: true,
-    sanitizedPath: input
-  };
-}
 
 /**
  * Validates output path for writing files
@@ -571,7 +400,7 @@ export function validateOutputPath(
   // Check write permissions by testing if directory is writable
   try {
     fs.accessSync(parentDir, fs.constants.W_OK);
-  } catch (error) {
+  } catch (error: unknown) {
     return {
       valid: false,
       error: "No write permission for output directory",

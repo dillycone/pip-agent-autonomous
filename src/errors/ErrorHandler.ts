@@ -6,6 +6,9 @@
 import { AppError } from "./BaseError.js";
 import { sanitizeError, sanitizeForLogging } from "../utils/sanitize.js";
 import { safeStringify } from "../utils/safe-stringify.js";
+import { createChildLogger } from "../utils/logger.js";
+
+const logger = createChildLogger("error-handler");
 
 /**
  * Checks if an error is an operational error (expected/recoverable).
@@ -118,7 +121,20 @@ export function formatErrorForUser(error: unknown): string {
 export function handleError(error: unknown, context?: string): void {
   const sanitized = sanitizeError(error);
   const userMessage = formatErrorForUser(error);
+  const isOperational = isOperationalError(error);
 
+  // Structured logging for system monitoring
+  logger.error(
+    {
+      error: sanitized,
+      context,
+      isOperational,
+      userMessage
+    },
+    `Error${context ? ` in ${context}` : ""}`
+  );
+
+  // User-facing CLI output (kept for UX)
   // Log context if provided
   if (context) {
     console.error(`\n❌ Error in ${context}:`);
@@ -130,7 +146,7 @@ export function handleError(error: unknown, context?: string): void {
   console.error(`   ${userMessage}`);
 
   // For operational errors, show minimal technical details
-  if (isOperationalError(error)) {
+  if (isOperational) {
     if (sanitized.code) {
       console.error(`   Code: ${sanitized.code}`);
     }
@@ -141,42 +157,3 @@ export function handleError(error: unknown, context?: string): void {
   }
 }
 
-/**
- * Wraps an error with additional context.
- * Useful for adding context while preserving the original error.
- *
- * @param error - The original error
- * @param context - Context message to prepend
- * @returns A new error with the added context
- *
- * @example
- * try {
- *   await processFile(path);
- * } catch (error) {
- *   throw wrapError(error, "Failed to process audio file");
- * }
- */
-export function wrapError(error: unknown, context: string): Error {
-  if (error instanceof Error) {
-    const wrappedMessage = `${context}: ${error.message}`;
-
-    // Preserve AppError structure if possible
-    if (error instanceof AppError) {
-      // Create a new AppError with the same code and metadata
-      return new AppError(
-        wrappedMessage,
-        error.code,
-        error.statusCode,
-        error.metadata,
-        error.isOperational
-      );
-    }
-
-    // Otherwise create a standard Error
-    const wrapped = new Error(wrappedMessage);
-    wrapped.stack = error.stack;
-    return wrapped;
-  }
-
-  return new Error(`${context}: ${String(error)}`);
-}

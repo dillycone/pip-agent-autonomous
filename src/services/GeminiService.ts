@@ -1,4 +1,6 @@
 import { Readable } from "node:stream";
+import { normalizeUsageMetadata } from "../utils/usage-normalization.js";
+import type { GoogleGenAI } from "@google/genai";
 
 /**
  * Gemini Service - Dependency Injection Wrapper for Google Gen AI SDK
@@ -143,7 +145,7 @@ export interface IGeminiService {
  * for file upload and content generation operations.
  */
 export class GeminiService implements IGeminiService {
-  private ai: any;
+  private ai: GoogleGenAI | null = null;
 
   /**
    * Create a new Gemini service instance
@@ -162,7 +164,7 @@ export class GeminiService implements IGeminiService {
     this.aiPromise = loadGeminiSDK();
   }
 
-  private aiPromise: Promise<any>;
+  private aiPromise: Promise<GoogleGenAI>;
 
   /**
    * Ensure the AI client is initialized
@@ -184,19 +186,21 @@ export class GeminiService implements IGeminiService {
   async uploadFile(file: GeminiUploadSource, mimeType: string): Promise<UploadedFile> {
     const ai = await this.ensureClient();
 
-    const payload: Record<string, unknown> = { mimeType };
+    interface UploadPayload {
+      file: string | Buffer | Readable;
+      mimeType: string;
+    }
 
-    if (typeof file === "string") {
-      payload.file = file;
-    } else if (Buffer.isBuffer(file)) {
-      payload.file = file;
-    } else if (isReadableStream(file)) {
-      payload.file = file;
-    } else {
+    const payload: UploadPayload = {
+      file: typeof file === "string" || Buffer.isBuffer(file) || isReadableStream(file) ? file : "",
+      mimeType
+    };
+
+    if (!payload.file) {
       throw new Error("Unsupported upload source type for GeminiService.uploadFile");
     }
 
-    const uploaded = await ai.files.upload(payload);
+    const uploaded = await ai.files.upload(payload as unknown as Parameters<typeof ai.files.upload>[0]);
 
     // Normalize the response structure (API may return different shapes)
     const normalized = normalizeUploadedFile(uploaded);
@@ -225,14 +229,14 @@ export class GeminiService implements IGeminiService {
       model: params.model,
       contents: params.contents,
       config: params.config
-    } as any);
+    });
 
-    const rawResult = result as Record<string, unknown>;
+    const rawResult = result as unknown as Record<string, unknown>;
     const text = typeof rawResult.text === "string" ? rawResult.text : undefined;
     const rawResponse = rawResult.response;
 
     let response: GenerateContentResult["response"];
-    if (rawResponse && typeof rawResponse === "object" && typeof (rawResponse as any).text === "function") {
+    if (rawResponse && typeof rawResponse === "object" && typeof (rawResponse as Record<string, unknown>).text === "function") {
       const textFn = (rawResponse as { text: () => string }).text.bind(rawResponse);
       response = { text: textFn };
     }
@@ -253,7 +257,23 @@ export class GeminiService implements IGeminiService {
   async generateText(params: GenerateTextParams): Promise<{ text: string; usage?: Record<string, unknown> }> {
     const ai = await this.ensureClient();
 
-    const requestConfig: any = {
+    interface GenerateContentRequest {
+      model: string;
+      contents: Array<{
+        role: string;
+        parts: Array<{ text: string }>;
+      }>;
+      config?: {
+        temperature?: number;
+        maxOutputTokens?: number;
+        thinkingConfig?: {
+          thinkingBudget: number;
+        };
+      };
+      systemInstruction?: string;
+    }
+
+    const requestConfig: GenerateContentRequest = {
       model: params.model,
       contents: [
         {
@@ -271,13 +291,13 @@ export class GeminiService implements IGeminiService {
 
     const result = await ai.models.generateContent(requestConfig);
 
-    const rawResult = result as Record<string, unknown>;
+    const rawResult = result as unknown as Record<string, unknown>;
     let text = typeof rawResult.text === "string" ? rawResult.text : undefined;
 
     // Try to extract text from response object if not directly available
     if (!text) {
       const rawResponse = rawResult.response;
-      if (rawResponse && typeof rawResponse === "object" && typeof (rawResponse as any).text === "function") {
+      if (rawResponse && typeof rawResponse === "object" && typeof (rawResponse as Record<string, unknown>).text === "function") {
         text = (rawResponse as { text: () => string }).text();
       }
     }
@@ -325,7 +345,7 @@ function normalizeUploadedFile(uploaded: unknown): UploadedFile {
   if (!uploaded || (typeof uploaded !== "object" && typeof uploaded !== "function")) {
     return normalized;
   }
-  const payload = (uploaded as any).file ?? uploaded;
+  const payload = (uploaded as Record<string, unknown>).file ?? uploaded;
   if (!payload || typeof payload !== "object") {
     return normalized;
   }
@@ -385,12 +405,12 @@ function extractUsageMetadata(result: unknown): Record<string, unknown> | undefi
 
   const directUsage = rootRecord.usageMetadata;
   if (isUsageMetadataCandidate(directUsage)) {
-    return directUsage;
+    return normalizeUsageMetadata(directUsage) ?? undefined;
   }
 
   const legacyDirectUsage = rootRecord.usage_metadata;
   if (isUsageMetadataCandidate(legacyDirectUsage)) {
-    return legacyDirectUsage;
+    return normalizeUsageMetadata(legacyDirectUsage) ?? undefined;
   }
 
   const response = rootRecord.response;
@@ -398,11 +418,11 @@ function extractUsageMetadata(result: unknown): Record<string, unknown> | undefi
     const responseRecord = response as Record<string, unknown>;
     const responseUsage = responseRecord.usageMetadata;
     if (isUsageMetadataCandidate(responseUsage)) {
-      return responseUsage;
+      return normalizeUsageMetadata(responseUsage) ?? undefined;
     }
     const legacyResponseUsage = responseRecord.usage_metadata;
     if (isUsageMetadataCandidate(legacyResponseUsage)) {
-      return legacyResponseUsage;
+      return normalizeUsageMetadata(legacyResponseUsage) ?? undefined;
     }
 
     const candidates = responseRecord.candidates;
@@ -412,11 +432,11 @@ function extractUsageMetadata(result: unknown): Record<string, unknown> | undefi
         const candidateRecord = candidate as Record<string, unknown>;
         const candidateUsage = candidateRecord.usageMetadata;
         if (isUsageMetadataCandidate(candidateUsage)) {
-          return candidateUsage;
+          return normalizeUsageMetadata(candidateUsage) ?? undefined;
         }
         const legacyCandidateUsage = candidateRecord.usage_metadata;
         if (isUsageMetadataCandidate(legacyCandidateUsage)) {
-          return legacyCandidateUsage;
+          return normalizeUsageMetadata(legacyCandidateUsage) ?? undefined;
         }
       }
     }

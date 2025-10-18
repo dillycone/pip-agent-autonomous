@@ -2,23 +2,6 @@ import { safeSpawn } from "../utils/shell-safe.js";
 import type { AudioProbeData } from "../types/index.js";
 import { isAudioProbeData } from "../types/index.js";
 
-export interface CommandResult {
-  stdout: string;
-  stderr: string;
-}
-
-export async function runCommand(command: string, args: string[]): Promise<CommandResult> {
-  const result = await safeSpawn(command, args, {
-    timeout: 300000,
-    validatePaths: true
-  });
-
-  return {
-    stdout: result.stdout,
-    stderr: result.stderr
-  };
-}
-
 export interface AudioValidationDetails {
   codec?: string;
   bitrate?: string;
@@ -34,7 +17,7 @@ export interface AudioValidationResult {
 
 export async function validateAudioFile(filePath: string): Promise<AudioValidationResult> {
   try {
-    const { stdout } = await runCommand("ffprobe", [
+    const result = await safeSpawn("ffprobe", [
       "-v",
       "error",
       "-show_entries",
@@ -44,9 +27,13 @@ export async function validateAudioFile(filePath: string): Promise<AudioValidati
       "-of",
       "json",
       filePath
-    ]);
+    ], {
+      timeout: 300000,
+      validatePaths: true
+    });
 
     let probeData: AudioProbeData;
+    const stdout = result.stdout;
     try {
       const parsed: unknown = JSON.parse(stdout.trim());
       if (!isAudioProbeData(parsed)) {
@@ -161,7 +148,7 @@ export async function validateAudioFile(filePath: string): Promise<AudioValidati
 
 export async function probeDuration(filePath: string): Promise<number | null> {
   try {
-    const { stdout } = await runCommand("ffprobe", [
+    const result = await safeSpawn("ffprobe", [
       "-v",
       "error",
       "-show_entries",
@@ -169,8 +156,11 @@ export async function probeDuration(filePath: string): Promise<number | null> {
       "-of",
       "default=noprint_wrappers=1:nokey=1",
       filePath
-    ]);
-    const value = parseFloat(stdout.trim());
+    ], {
+      timeout: 300000,
+      validatePaths: true
+    });
+    const value = parseFloat(result.stdout.trim());
     return Number.isFinite(value) ? value : null;
   } catch {
     return null;

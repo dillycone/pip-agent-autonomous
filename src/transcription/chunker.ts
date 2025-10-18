@@ -2,7 +2,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import type { IFileSystemService } from "../services/index.js";
 import { sanitizeError } from "../utils/sanitize.js";
-import { runCommand, probeDuration } from "./audioValidation.js";
+import { safeSpawn } from "../utils/shell-safe.js";
+import { probeDuration } from "./audioValidation.js";
 
 export type ChunkInfo = { path: string; index: number; offsetSeconds: number };
 
@@ -54,7 +55,7 @@ export async function splitAudio(params: {
   log("info", { estimatedChunks, chunkSeconds, duration }, `🎵 Splitting audio into ~${estimatedChunks} chunks (${chunkSeconds} seconds each)...`);
 
   try {
-    await runCommand("ffmpeg", [
+    await safeSpawn("ffmpeg", [
       "-hide_banner",
       "-loglevel",
       "error",
@@ -67,8 +68,11 @@ export async function splitAudio(params: {
       "-c",
       "copy",
       pattern
-    ]);
-  } catch (error) {
+    ], {
+      timeout: 300000,
+      validatePaths: true
+    });
+  } catch (error: unknown) {
     const sanitized = sanitizeError(error);
     log("warn", { error: sanitized }, "⚠️  Copy-based chunking failed, falling back to PCM re-encode");
     const existing = await fsService.readdir(tmpDir);
@@ -81,7 +85,7 @@ export async function splitAudio(params: {
     chunkExtension = ".wav";
     pattern = path.join(tmpDir, `chunk_%03d${chunkExtension}`);
 
-    await runCommand("ffmpeg", [
+    await safeSpawn("ffmpeg", [
       "-hide_banner",
       "-loglevel",
       "error",
@@ -98,7 +102,10 @@ export async function splitAudio(params: {
       "-ac",
       "1",
       pattern
-    ]);
+    ], {
+      timeout: 300000,
+      validatePaths: true
+    });
   }
 
   const entries = await fsService.readdir(tmpDir);

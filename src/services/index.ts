@@ -61,9 +61,3 @@ export type {
   IFileSystemService,
   MkdirOptions
 } from "./FileSystemService.js";
-
-// Service Container (optional but recommended)
-export {
-  ServiceContainer,
-  createServiceContainer
-} from "./ServiceContainer.js";

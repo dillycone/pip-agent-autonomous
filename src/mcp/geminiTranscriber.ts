@@ -25,6 +25,7 @@ import {
   createGeminiService,
   createFileSystemService
 } from "../services/index.js";
+import { MAX_FILE_SIZE, DURATION_THRESHOLD_SECONDS } from "../constants/limits.js";
 
 const logger = createChildLogger("gemini-transcriber");
 
@@ -32,8 +33,15 @@ const logger = createChildLogger("gemini-transcriber");
 function safeLog(level: "info" | "warn" | "error", data: Record<string, unknown>, message: string): void {
   try {
     logger[level](data, message);
-  } catch {
-    console.log(`[${level}] ${message}`, data);
+  } catch (err) {
+    // Fallback to basic logging if structured logging fails (e.g., in worker threads)
+    // Using logger.info with minimal data to avoid circular issues
+    try {
+      logger.info({ level, fallback: true }, message);
+    } catch {
+      // Last resort: no-op to prevent crashes
+      // Structured logging failed entirely, skip this log entry
+    }
   }
 }
 
@@ -47,7 +55,7 @@ function getGeminiService(): IGeminiService {
   return geminiService;
 }
 
-const MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024; // 200MB hard cap
+const MAX_AUDIO_FILE_BYTES = MAX_FILE_SIZE; // 200MB hard cap
 const MAX_CHUNKS_PER_CALL = 1; // Stream-friendly: process one chunk per MCP call
 
 function buildSuccess(
@@ -149,7 +157,7 @@ export const geminiTranscriber = createSdkMcpServer({
           const shouldChunkDefault = duration === null ? true : duration > GEMINI_SINGLE_PASS_MAX;
 
           // Warn user about long processing times for larger files
-          if (duration && duration > 120) {
+          if (duration && duration > DURATION_THRESHOLD_SECONDS) {
             const estimatedMinutes = Math.ceil(duration / 60);
             safeLog(
               'info',

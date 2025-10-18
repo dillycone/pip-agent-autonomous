@@ -68,8 +68,17 @@ async function generateDraft(
       { transcriptLength, transcriptWordCount, model: params.model, thinkingBudget: validatedThinkingBudget },
       `📝 Generating PIP draft from transcript (${transcriptLength} chars, ~${transcriptWordCount} words) with thinking budget ${validatedThinkingBudget}`
     );
-  } catch {
-    console.log(`Generating PIP from transcript (${transcriptLength} chars, ~${transcriptWordCount} words) with model ${params.model}`);
+  } catch (err) {
+    // Fallback to basic logging if structured logging fails
+    try {
+      logger.info(
+        { transcriptLength, transcriptWordCount, model: params.model, fallback: true },
+        `Generating PIP draft from transcript`
+      );
+    } catch {
+      // Last resort: no-op to prevent crashes
+      // Structured logging failed entirely, skip this log entry
+    }
   }
 
   const sanitizedTranscript = params.transcript.replace(/<END_TRANSCRIPT>/g, "<END_TRANSCRIPT_ESCAPED>");

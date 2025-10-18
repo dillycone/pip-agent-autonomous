@@ -1,12 +1,10 @@
 "use client";
 
 import React, { useState } from "react";
+import type { Step, StepStatus, TimelineItem } from "@/lib/types";
 import { ChevronDown, Clock, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
 import { formatDuration } from "@/lib/utils";
 import styles from "./pipeline.module.css";
-
-type Step = "transcribe" | "draft" | "review" | "export";
-type StepStatus = "pending" | "running" | "success" | "error";
 
 type CurrentActivityCardProps = {
   step: Step;
@@ -23,7 +21,7 @@ type CurrentActivityCardProps = {
     cacheReadTokens?: number;
   } | null;
   reviewRounds: Array<{ round: number; approved: boolean; reasons: string[]; requiredChanges: string[] }>;
-  timeline: any[];
+  timeline: TimelineItem[];
 };
 
 const stepDescriptions: Record<Step, string> = {
@@ -243,7 +241,7 @@ export default function CurrentActivityCard({
                     Recent Tool Activity
                   </p>
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                    {timeline.slice(0, 3).map((item: any) => (
+                    {timeline.slice(0, 3).map((item) => (
                       <div
                         key={item.id}
                         style={{
