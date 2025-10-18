@@ -40,13 +40,13 @@ export function isValidDocx(
 ): boolean {
   try {
     if (!fs.existsSync(pathToDocx)) {
-      if (failureReason) failureReason.reason = "DOCX file is missing";
+      if (failureReason) {failureReason.reason = "DOCX file is missing";}
       return false;
     }
 
     const content = fs.readFileSync(pathToDocx);
     if (content.length === 0) {
-      if (failureReason) failureReason.reason = "DOCX file is empty";
+      if (failureReason) {failureReason.reason = "DOCX file is empty";}
       return false;
     }
 
@@ -56,7 +56,7 @@ export function isValidDocx(
     for (const entry of requiredEntries) {
       const file = zip.file(entry);
       if (!file || file.dir) {
-        if (failureReason) failureReason.reason = `Missing required entry: ${entry}`;
+        if (failureReason) {failureReason.reason = `Missing required entry: ${entry}`;}
         return false;
       }
     }
@@ -194,9 +194,13 @@ export function validateExportPhase(
 
   const failureReason: { reason?: string } = {};
   if (!isValidDocx(outputPath, failureReason)) {
+    const reasonMessage =
+      typeof failureReason.reason === "string" && failureReason.reason.trim().length > 0
+        ? failureReason.reason
+        : "unknown reason";
     emit("log", {
       level: "warn",
-      message: `Output DOCX validation failed: ${failureReason.reason || "unknown reason"}`
+      message: `Output DOCX validation failed: ${reasonMessage}`
     });
     return {
       valid: false,
@@ -282,7 +286,8 @@ export function parseFinalResult(
   logJsonParseFailure: (source: string, raw: string, error: unknown) => void
 ): unknown {
   if (typeof rawResult === "string") {
-    const cleaned = rawResult.replace(/```json\s*|```/g, "").trim();
+    const candidate = extractJsonCandidate(rawResult) ?? rawResult;
+    const cleaned = candidate.replace(/```json\s*|```/g, "").trim();
     try {
       return JSON.parse(cleaned);
     } catch (error: unknown) {
@@ -291,6 +296,33 @@ export function parseFinalResult(
     }
   }
   return rawResult;
+}
+
+function extractJsonCandidate(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const fencedMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fencedMatch) {
+    return fencedMatch[1].trim();
+  }
+
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    const candidate = trimmed.slice(start, end + 1).trim();
+    if (candidate.startsWith("{") && candidate.endsWith("}")) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -349,6 +381,7 @@ export function processFinalResult(
  */
 export function toSerializableError(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { stack, ...rest } = {
       name: error.name,
       message: error.message,
@@ -361,6 +394,7 @@ export function toSerializableError(error: unknown): Record<string, unknown> {
   }
   if (error && typeof error === "object") {
     const obj = error as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { stack, ...rest } = obj;
     return rest;
   }
