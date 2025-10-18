@@ -1,0 +1,451 @@
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Pipeline Status Card */
+.pipelineCard {
+  background: #ffffff;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pipelineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pipelineTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.cancelBtn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.cancelBtn:hover {
+  background: #f8fafc;
+}
+
+.progressSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progressLabel {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.progressBar {
+  width: 100%;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #10b981);
+  transition: width 0.25s ease;
+}
+
+.phaseGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+/* Phase Card */
+.phaseCard {
+  padding: 12px 8px;
+  border-radius: 10px;
+  border: 2px solid #e2e8f0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  transition: all 0.2s ease;
+}
+
+.phasePending {
+  composes: phaseCard;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.phaseActive {
+  composes: phaseCard;
+  background: #ecfeff;
+  border-color: #38bdf8;
+  border-width: 2px;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+}
+
+.phaseSuccess {
+  composes: phaseCard;
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.phaseError {
+  composes: phaseCard;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.phaseIcon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.phaseLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.phaseStatus {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* Current Activity Card */
+.activityCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.activityHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.activityTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.activityDescription {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
+.streamingBadge {
+  display: inline-block;
+  padding: 4px 8px;
+  background: #cffafe;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+}
+
+.timeInfo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.previewBox {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+  font-family: 'SFMono-Regular', ui-monospace, monospace;
+  font-size: 12px;
+  color: #1e293b;
+  line-height: 1.5;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.techDetails {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+}
+
+.detailsToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  transition: color 0.2s ease;
+}
+
+.detailsToggle:hover {
+  color: #1e293b;
+}
+
+.detailsContent {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  font-size: 11px;
+}
+
+.metricItem {
+  display: flex;
+  justify-content: space-between;
+  color: #64748b;
+  padding: 4px 0;
+}
+
+/* Document Output Card */
+.documentCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.documentTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.documentStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.downloadBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 0 16px;
+  background: #0ea5e9;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  text-decoration: none;
+}
+
+.downloadBtn:hover {
+  background: #0284c7;
+}
+
+.documentMeta {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.metaRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.metaLabel {
+  color: #64748b;
+}
+
+.metaValue {
+  color: #1e293b;
+  font-family: 'SFMono-Regular', ui-monospace, monospace;
+  word-break: break-all;
+}
+
+/* Error Alert */
+.errorAlert {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.errorHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.errorIcon {
+  font-size: 18px;
+  color: #991b1b;
+}
+
+.errorTitle {
+  font-weight: 600;
+  color: #991b1b;
+  font-size: 14px;
+  margin: 0;
+}
+
+.errorMessage {
+  font-size: 13px;
+  color: #991b1b;
+  margin: 0;
+}
+
+.errorSolutions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #991b1b;
+}
+
+.solutionsList {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.solutionsList li {
+  margin: 4px 0;
+}
+
+.errorActions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #fecaca;
+}
+
+.retryBtn {
+  padding: 6px 12px;
+  background: #dc2626;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.retryBtn:hover {
+  background: #b91c1c;
+}
+
+.resetBtn {
+  padding: 6px 12px;
+  background: transparent;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.resetBtn:hover {
+  background: rgba(220, 38, 38, 0.05);
+}
+
+@media (max-width: 768px) {
+  .phaseGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .metricsGrid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -860,6 +860,132 @@
   border-color: #6ee7b7;
 }
 
+/* Configuration Form Redesign */
+.configCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.configSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.configSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.configIcon {
+  width: 18px;
+  height: 18px;
+  color: #0ea5e9;
+  flex-shrink: 0;
+}
+
+.configLabel {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.configInput {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.configInput:focus {
+  outline: none;
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+}
+
+.configInput:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.configHint {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.configGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.configButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 20px;
+  height: 48px;
+  background: #0ea5e9;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+  align-self: center;
+  margin-top: 8px;
+}
+
+.configButton:hover:not(:disabled) {
+  background: #0284c7;
+  box-shadow: 0 6px 18px rgba(2, 132, 199, 0.25);
+}
+
+.configButton:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.configButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.configButtonIcon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Form field label styling */
+.configFieldLabel {
+  display: block;
+  margin-bottom: 12px;
+  margin-top: 4px;
+}
+
+/* Ensure consistent section spacing */
+.configSection + .configSection {
+  margin-top: 12px;
+}
+
 @media (max-width: 960px) {
   .grid {
     grid-template-columns: 1fr;
@@ -871,5 +997,13 @@
 
   .formRow label {
     text-align: left;
+  }
+
+  .configGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .configCard {
+    max-width: 100%;
   }
 }

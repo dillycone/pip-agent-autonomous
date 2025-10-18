@@ -1,0 +1,367 @@
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+  color: #0b1221;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.sub {
+  margin: 0 0 16px;
+  color: #5b6478;
+}
+
+.formRow {
+  display: grid;
+  grid-template-columns: 80px 1fr 60px 120px 70px 120px 80px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 16px;
+}
+
+.formRow label {
+  font-size: 12px;
+  color: #334155;
+  text-align: right;
+}
+
+.formRow input {
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 13px;
+  background: #ffffff;
+}
+
+.runBtn {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #0ea5e9;
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+}
+
+.leftCol,
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stepper {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.step {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 10px;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.step + .step {
+  margin-top: 6px;
+}
+
+.stepPending {
+  background: #fafafa;
+}
+
+.stepRunning {
+  background: #ecfeff;
+  border: 1px dashed #22d3ee;
+}
+
+.stepSuccess {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+}
+
+.stepError {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.stepIndex {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #e5e7eb;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+}
+
+.stepLabel {
+  font-weight: 600;
+}
+
+.stepMeta {
+  font-size: 12px;
+  color: #475569;
+}
+
+.progressBarOuter {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.progressBarInner {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #10b981);
+  transition: width 0.25s ease;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tabBar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tabBtn {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.tabBtn:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+}
+
+.active {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+}
+
+.tabPanel {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 160px;
+}
+
+.console {
+  height: 300px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.logLine {
+  white-space: pre-wrap;
+  display: grid;
+  grid-template-columns: 80px 100px 1fr;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px dotted #f1f5f9;
+}
+
+.logLinePlaceholder {
+  padding: 8px 0;
+  color: #94a3b8;
+}
+
+.logTs {
+  color: #64748b;
+}
+
+.logType {
+  font-weight: 600;
+  color: #334155;
+}
+
+.logText {
+  color: #111827;
+}
+
+.pre {
+  background: #0b1020;
+  color: #e5e7eb;
+  padding: 12px;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.progressRow {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.ring {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: conic-gradient(var(--ring-progress-color, #22c55e) 0deg, var(--ring-track-color, #e5e7eb) 0);
+  display: grid;
+  place-items: center;
+}
+
+.ringInner {
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background: var(--ring-inner-bg, #fff);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.ringSub {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--ring-subtext-color, #64748b);
+}
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.kpiLabel {
+  font-size: 12px;
+  color: #475569;
+}
+
+.kpiValue {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.artifacts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.round {
+  margin-bottom: 8px;
+}
+
+.round summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.diff {
+  background: #0b1020;
+  color: #e5e7eb;
+  padding: 8px;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.diffAdd { color: #16a34a; }
+.diffDel { color: #ef4444; }
+.diffCtx { color: #94a3b8; }
+
+.timeline { display: flex; flex-direction: column; gap: 8px; }
+.timelineCard {
+  border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden;
+}
+.tlRun { background: #f0f9ff; }
+.tlOk { background: #f0fdf4; }
+.tlErr { background: #fef2f2; }
+.timelineHeader { display: grid; grid-template-columns: 56px 1fr 80px; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #e5e7eb; }
+.tlStatus { font-weight: 700; color: #334155; }
+.tlName { font-weight: 600; color: #0b1221; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tlRight { text-align: right; color: #475569; font-variant-numeric: tabular-nums; }
+.timelineBody { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.tlLine { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: baseline; }
+.tlCode { background: #0b1020; color: #e5e7eb; padding: 4px 6px; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tlMeta { color: #64748b; font-size: 12px; }
+
+.toasts { position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+.toast { padding: 10px 12px; border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.08); cursor: pointer; font-weight: 600; border: 1px solid; }
+.toastInfo { background: #eff6ff; color: #1e3a8a; border-color: #bfdbfe; }
+.toastOk { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.toastWarn { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+.toastErr { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+
+.docxPathHint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #64748b;
+  word-break: break-word;
+}
+
+@media (max-width: 960px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .formRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .formRow label {
+    text-align: left;
+  }
+}

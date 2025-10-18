@@ -4,9 +4,13 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import type { ReactNode } from "react";
 import allowedExtensions from "../../../src/config/allowedExtensions.json";
 import styles from "./styles.module.css";
-import StatusDashboard from "./components/StatusDashboard";
+import PipelineStatusCard from "./components/pipeline/PipelineStatusCard";
+import ErrorAlert from "./components/pipeline/ErrorAlert";
+import CurrentActivityCard from "./components/pipeline/CurrentActivityCard";
+import DocumentOutputCard from "./components/pipeline/DocumentOutputCard";
 import { safeJsonParse, formatDuration, formatDurationMs } from "../lib/utils";
 import type { LogItem, TimelineItem, CostState } from "../lib/types";
+import { FileUp, Globe, FileText, FolderOpen, Play } from "lucide-react";
 
 export type Step = "transcribe" | "draft" | "review" | "export";
 export type StepStatus = "pending" | "running" | "success" | "error";
@@ -249,10 +253,12 @@ function computeOverallProgress(state: {
 
 export default function Page() {
   const [audio, setAudio] = useState("uploads/meeting.mp3");
-  const [inLang, setInLang] = useState("auto");
-  const [outLang, setOutLang] = useState("en");
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [inLang, setInLang] = useState("Auto");
+  const [outLang, setOutLang] = useState("En");
   const [template, setTemplate] = useState("templates/pip-template.docx");
   const [outdoc, setOutdoc] = useState(() => `exports/pip-${Date.now()}.docx`);
+  const audioFileInputRef = useRef<HTMLInputElement>(null);
 
   const [running, setRunning] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
@@ -338,6 +344,25 @@ export default function Page() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
   }, []);
+
+  const handleAudioFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      // Validate file extension
+      const fileName = file.name.toLowerCase();
+      if (hasAllowedExtension(fileName, ALLOWED_AUDIO_EXTENSIONS)) {
+        // Store the file with "uploads/" prefix to maintain consistency with the expected path format
+        const audioPath = `uploads/${file.name}`;
+        setAudio(audioPath);
+        setSelectedFileName(file.name);
+        pushToast(`Audio file selected: ${file.name}`, "success");
+      } else {
+        pushToast(`Invalid audio format. Supported: ${ALLOWED_AUDIO_EXTENSIONS.join(", ")}`, "error");
+      }
+    }
+    // Reset the input so the same file can be selected again if needed
+    event.target.value = "";
+  }, [pushToast]);
 
   const validateFormInputs = useCallback((): string[] => {
     const issues: string[] = [];
@@ -984,131 +1009,158 @@ export default function Page() {
   return (
     <main className={styles.page}>
       <Toasts toasts={toasts} onClose={(id) => setToasts((prev) => prev.filter((t) => t.id !== id))} />
-      <header className={styles.header}>
-        <h1>PIP Agent — Autonomous Run</h1>
-        <p className={styles.sub}>
-          Watch transcription → draft → policy review → export in real time.
-          {steps.transcribe === "running" && transcribeElapsedSeconds > 30 && (
-            <span style={{ display: "block", marginTop: "0.5rem", fontSize: "0.9em", opacity: 0.8 }}>
-              Long audio files may take 5-10 minutes to transcribe. Progress updates appear periodically.
-            </span>
-          )}
-        </p>
+      <header className={styles.header} style={{ textAlign: "center", marginBottom: "32px" }}>
+        <h1>PIP Generation Agent</h1>
+        {steps.transcribe === "running" && transcribeElapsedSeconds > 30 && (
+          <p style={{ marginTop: "0.5rem", fontSize: "0.9em", opacity: 0.8, color: "var(--text-secondary)" }}>
+            Long audio files may take 5-10 minutes to transcribe. Progress updates appear periodically.
+          </p>
+        )}
       </header>
 
-      <section className={styles.formRow}>
-        <label htmlFor="audio">Audio</label>
-        <div className={styles.inputField}>
-          <input id="audio" value={audio} onChange={(e) => setAudio(e.target.value)} placeholder="uploads/meeting.mp3" />
-          <div className={styles.inputHint}>MP3, WAV supported. Path cannot contain ..</div>
+      <section className={styles.configCard}>
+        {/* Audio Input Section */}
+        <div className={styles.configSection}>
+          <div className={styles.configSectionHeader}>
+            <FileUp className={styles.configIcon} size={18} />
+            <label className={styles.configLabel}>Audio Input</label>
+          </div>
+          <input
+            ref={audioFileInputRef}
+            type="file"
+            id="audio"
+            className={styles.configInput}
+            style={{ display: "none" }}
+            accept={ALLOWED_AUDIO_EXTENSIONS.join(",")}
+            onChange={handleAudioFileSelect}
+          />
+          <button
+            type="button"
+            className={styles.configButton}
+            onClick={() => audioFileInputRef.current?.click()}
+          >
+            <FolderOpen size={18} />
+            {selectedFileName ? `✓ ${selectedFileName}` : "Select Audio File"}
+          </button>
+          <div className={styles.configHint}>
+            MP3, WAV supported. Click to select a file from your computer.
+          </div>
         </div>
-        <label htmlFor="inLang">Input</label>
-        <div className={styles.inputField}>
-          <input id="inLang" value={inLang} onChange={(e) => setInLang(e.target.value)} placeholder="auto" />
-          <div className={styles.inputHint}>Language code or &quot;auto&quot; for detection</div>
+
+        {/* Translation Section */}
+        <div className={styles.configSection}>
+          <div className={styles.configSectionHeader}>
+            <Globe className={styles.configIcon} size={18} />
+            <label className={styles.configLabel}>Translation Settings</label>
+          </div>
+          <div className={styles.configGrid}>
+            <div>
+              <label className={`${styles.configLabel} ${styles.configFieldLabel}`} htmlFor="inLang">
+                Source Language
+              </label>
+              <input
+                id="inLang"
+                className={styles.configInput}
+                value={inLang}
+                onChange={(e) => setInLang(e.target.value)}
+                placeholder="auto"
+              />
+              <div className={styles.configHint}>
+                Code or &quot;auto&quot; for detection
+              </div>
+            </div>
+            <div>
+              <label className={`${styles.configLabel} ${styles.configFieldLabel}`} htmlFor="outLang">
+                Target Language
+              </label>
+              <input
+                id="outLang"
+                className={styles.configInput}
+                value={outLang}
+                onChange={(e) => setOutLang(e.target.value)}
+                placeholder="en"
+              />
+              <div className={styles.configHint}>
+                Language code (e.g., en, es, fr)
+              </div>
+            </div>
+          </div>
         </div>
-        <label htmlFor="outLang">Output</label>
-        <div className={styles.inputField}>
-          <input id="outLang" value={outLang} onChange={(e) => setOutLang(e.target.value)} placeholder="en" />
-          <div className={styles.inputHint}>Target language code (e.g., en, es, fr)</div>
-        </div>
-        <label htmlFor="template">Template</label>
-        <div className={styles.inputField}>
-          <input id="template" value={template} onChange={(e) => setTemplate(e.target.value)} />
-          <div className={styles.inputHint}>.docx file path. Path cannot contain ..</div>
-        </div>
-        <label htmlFor="outdoc">Out Doc</label>
-        <div className={styles.inputField}>
-          <input id="outdoc" value={outdoc} onChange={(e) => setOutdoc(e.target.value)} />
-          <div className={styles.inputHint}>Output .docx path. Path cannot contain ..</div>
-        </div>
-        <button onClick={startRun} disabled={running} className={styles.runBtn}>
+
+
+
+        {/* Start Button */}
+        <button
+          onClick={startRun}
+          disabled={running}
+          className={styles.configButton}
+        >
+          <Play size={18} />
           {running ? "Running…" : "Start Run"}
         </button>
       </section>
 
       {running && (
-        <StatusDashboard
-          overallProgress={computeOverallProgress(streamState)}
-          currentStep={autoStep}
-          steps={steps}
-          hasError={Object.values(steps).some((s) => s === "error")}
-          errorMessage={(() => {
-            const errorStep = (Object.entries(steps) as Array<[Step, StepStatus]>).find(([_, s]) => s === "error")?.[0];
-            if (errorStep) {
-              const messages: Record<Step, string> = {
-                transcribe: "Transcription failed — check tool output for details.",
-                draft: "Draft generation failed — check tool output for details.",
-                review: "Review process failed — check tool output for details.",
-                export: "Export failed — check tool output for details."
-              };
-              return messages[errorStep];
-            }
-            return undefined;
-          })()}
-          elapsedSeconds={transcribeElapsedSeconds}
-          onCancel={handleCancelRun}
-          onRetry={handleRetryRun}
-          canRetry={!running && Object.values(steps).some((s) => s === "error")}
-        />
+        <div className="space-y-4 mb-6">
+          <PipelineStatusCard
+            overallProgress={computeOverallProgress(streamState)}
+            currentStep={autoStep}
+            steps={steps}
+            elapsedSeconds={transcribeElapsedSeconds}
+            onCancel={handleCancelRun}
+          />
+          {Object.values(steps).some((s) => s === "error") && (
+            <ErrorAlert
+              failedStep={
+                (Object.entries(steps) as Array<[Step, StepStatus]>).find(
+                  ([_, s]) => s === "error"
+                )?.[0] || null
+              }
+              errorMessage={(() => {
+                const errorStep = (Object.entries(steps) as Array<
+                  [Step, StepStatus]
+                >).find(([_, s]) => s === "error")?.[0];
+                if (errorStep) {
+                  const messages: Record<Step, string> = {
+                    transcribe:
+                      "Failed to process audio file during transcription",
+                    draft: "Failed to generate the performance improvement plan",
+                    review:
+                      "Failed during policy compliance review process",
+                    export: "Failed to export the final document"
+                  };
+                  return messages[errorStep];
+                }
+                return "An error occurred during pipeline execution";
+              })()}
+              onRetry={handleRetryRun}
+              onReset={resetState}
+            />
+          )}
+        </div>
       )}
 
-      <section className={styles.grid}>
-        <div className={styles.leftCol}>
-          <div className={styles.stepperRow}>
-            <Stepper
-              steps={[
-                {
-                  key: "transcribe",
-                  label: "Transcribe",
-                  status: steps.transcribe,
-                  meta: chunks.total
-                    ? `${progressMode === "heuristic" ? "≈" : ""}${chunks.processed}/${chunks.total} chunks (${pct}%) • ${formatDuration(transcribeElapsedSeconds)} elapsed${steps.transcribe === "running" && eta !== null ? ` • ETA ${formatDuration(eta)}` : ""}${progressMode === "heuristic" ? " • estimated" : ""}`
-                    : steps.transcribe === "running" && transcribeElapsedSeconds > 5
-                      ? `Processing... ${formatDuration(transcribeElapsedSeconds)} elapsed`
-                      : undefined,
-                  progress: chunks.total ? pct : undefined
-                },
-                { key: "draft", label: "Draft", status: steps.draft },
-                { key: "review", label: "Review", status: steps.review },
-                { key: "export", label: "Export", status: steps.export }
-              ]}
-              activeStep={visibleStep}
-              focusedStep={focusedStep}
-              onSelect={(stepKey) => setFocusedStep((prev) => (prev === stepKey ? null : stepKey))}
-            />
-            {focusedStep ? (
-              <button type="button" className={styles.followBtn} onClick={() => setFocusedStep(null)}>
-                Follow live step
-              </button>
-            ) : null}
-          </div>
-          <StepDetailPanel
-            step={visibleStep}
-            status={steps[visibleStep]}
-            running={running}
-            transcribe={{
-              processed: chunks.processed,
-              total: chunks.total,
-              percent: chunks.total ? pct : undefined,
-              elapsedSeconds: transcribeElapsedSeconds,
-              etaSeconds: eta,
-              uploadStartedAt,
-              uploadCompletedAt,
-              progressMode
-            }}
+      {running && (
+        <section className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+          <CurrentActivityCard
+            step={autoStep}
+            status={steps[autoStep]}
+            elapsedSeconds={transcribeElapsedSeconds}
             transcriptLines={transcriptStreamLines}
-            draft={{ lines: draftPreviewLines, previewStatus: draftPreviewStatus, usage: draftUsage }}
+            draftLines={draftPreviewLines}
+            draftPreviewStatus={draftPreviewStatus}
+            draftUsage={draftUsage}
             reviewRounds={reviewRounds}
-            exportData={{ docxPath, docxRelativePath, hasDocx: Boolean(docxPath || docxRelativePath) }}
             timeline={stepTimeline}
           />
-        </div>
-
-        <div className={styles.rightCol}>
-          <Artifacts finalDraft={finalDraft} docxPath={docxPath} docxRelative={docxRelativePath} />
-        </div>
-      </section>
+          <DocumentOutputCard
+            docxPath={docxPath}
+            docxRelativePath={docxRelativePath}
+            isReady={Boolean(docxPath || docxRelativePath)}
+            running={running}
+          />
+        </section>
+      )}
     </main>
   );
 }
